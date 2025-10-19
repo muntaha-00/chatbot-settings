@@ -33,6 +33,7 @@ model Session {
 
 model chatbotSettings {
   id        Int      @id @default(autoincrement())
+  shop      String?
   botName   String
   model     String   @default("openai") 
   createdAt DateTime @default(now())
@@ -43,6 +44,7 @@ model chatbotSettings {
 model ChatbotQuestion {
   id        Int      @id @default(autoincrement())
   question  String
+  shop      String
   createdAt DateTime @default(now())
 }
 

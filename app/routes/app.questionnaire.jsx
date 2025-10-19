@@ -1,9 +1,9 @@
 import { useState, useEffect } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
-import prisma from "../db.server";
+import prisma from "../db.server"; 
 
-// Local JSON helper
+// JSON helper
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
   if (!headers.has("Content-Type")) {
@@ -12,31 +12,45 @@ function json(data, init = {}) {
   return new Response(JSON.stringify(data), { ...init, headers });
 }
 
-// Loader: Load all saved questions
+// Loader: Load all saved questions for the current shop
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
-  const questions = await prisma.chatbotQuestion.findMany();
+  const { session } = await authenticate.admin(request);
+  const shop = session?.shop;
+  if (!shop) return json({ questions: [] });
+
+  const questions = await prisma.chatbotQuestion.findMany({
+    where: { shop },
+    orderBy: { createdAt: "asc" },
+  });
+
   return json({ questions });
 };
 
-// Action: Save questions list
+// Action: Save questions for the current shop
 export const action = async ({ request }) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
+  const shop = session?.shop;
+  if (!shop) return new Response("Shop not found", { status: 400 });
+
   const data = await request.formData();
   const questions = JSON.parse(data.get("questions") || "[]");
 
-  await prisma.chatbotQuestion.deleteMany(); // reset old
+  // Delete only this shop's old questions
+  await prisma.chatbotQuestion.deleteMany({ where: { shop } });
+
   for (const q of questions) {
-    await prisma.chatbotQuestion.create({ data: { question: q } });
+    await prisma.chatbotQuestion.create({ data: { question: q, shop } });
   }
 
   return json({ success: true });
 };
 
-// Component
+// Component: Questionnaire page
 export default function QuestionnairePage() {
   const { questions: loadedQuestions } = useLoaderData();
-  const [questions, setQuestions] = useState(loadedQuestions.map(q => q.question));
+  const [questions, setQuestions] = useState(
+    loadedQuestions.map((q) => q.question)
+  );
   const [newQuestion, setNewQuestion] = useState("");
   const [saved, setSaved] = useState(false); // ✅ success indicator
   const fetcher = useFetcher();
@@ -75,12 +89,19 @@ export default function QuestionnairePage() {
       <s-card title="Customer Questionnaire" sectioned>
         <s-stack direction="vertical" gap="base">
           {questions.map((q, i) => (
-            <s-stack key={i} direction="horizontal" gap="base" style={{ justifyContent: "space-between" }}>
+            <s-stack
+              key={i}
+              direction="horizontal"
+              gap="base"
+              style={{ justifyContent: "space-between" }}
+            >
               <s-text>{q}</s-text>
               <s-button
                 variant="secondary"
                 size="slim"
-                onClick={() => setQuestions(questions.filter((_, idx) => idx !== i))}
+                onClick={() =>
+                  setQuestions(questions.filter((_, idx) => idx !== i))
+                }
               >
                 Remove
               </s-button>
@@ -105,11 +126,15 @@ export default function QuestionnairePage() {
             </s-button>
           </s-stack>
 
-          <s-stack direction="horizontal" gap="base" alignment="center" style={{ marginTop: "16px" }}>
+          <s-stack
+            direction="horizontal"
+            gap="base"
+            alignment="center"
+            style={{ marginTop: "16px" }}
+          >
             <s-button variant="primary" onClick={handleSave}>
               Save Questionnaire
             </s-button>
-            {/* Success message */}
             {saved && (
               <s-text style={{ color: "green", marginLeft: "12px" }}>
                 Questionnaire saved successfully!

@@ -3,7 +3,7 @@ import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 
-// Local JSON helper
+// Helper to return JSON responses
 function json(data, init = {}) {
   const headers = new Headers(init.headers || {});
   if (!headers.has("Content-Type")) {
@@ -12,35 +12,48 @@ function json(data, init = {}) {
   return new Response(JSON.stringify(data), { ...init, headers });
 }
 
-// Loader: Fetch existing settings from DB
+// Loader — Load settings for this shop
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
-  const settings = await prisma.chatbotSettings.findFirst();
+  const { session } = await authenticate.admin(request); // ✅ get current shop session
+  const shop = session?.shop;
+  if (!shop) return new Response("Shop not found", { status: 400 });
+
+  // Fetch settings specific to this shop
+  const settings = await prisma.chatbotSettings.findFirst({
+    where: { shop },
+  });
+
   return json({ settings });
 };
 
-// Action: Save updated settings
+// Action — Save settings for this shop
 export const action = async ({ request }) => {
-  await authenticate.admin(request);
-  const data = await request.formData();
+  const { session } = await authenticate.admin(request);
+  const shop = session?.shop;
+  if (!shop) return new Response("Shop not found", { status: 400 });
 
+  const data = await request.formData();
   const botName = data.get("botName") || "ShopBot";
   const model = data.get("model") || "openai";
 
-  const existing = await prisma.chatbotSettings.findFirst();
+  // Upsert settings
+  const existing = await prisma.chatbotSettings.findFirst({ where: { shop } });
+
   if (existing) {
     await prisma.chatbotSettings.update({
       where: { id: existing.id },
       data: { botName, model },
     });
   } else {
-    await prisma.chatbotSettings.create({ data: { botName, model } });
+    await prisma.chatbotSettings.create({
+      data: { shop, botName, model },
+    });
   }
 
   return json({ success: true });
 };
 
-// Component: Settings page
+// Component
 export default function SettingsPage() {
   const { settings } = useLoaderData();
   const fetcher = useFetcher();
@@ -48,7 +61,7 @@ export default function SettingsPage() {
 
   const [model, setModel] = useState(settings?.model || "openai");
   const [botName, setBotName] = useState(settings?.botName || "ShopBot");
-  const [saved, setSaved] = useState(false); // ✅ confirmation indicator
+  const [saved, setSaved] = useState(false);
 
   const handleSave = () => {
     const formData = new FormData();
@@ -57,7 +70,6 @@ export default function SettingsPage() {
     fetcher.submit(formData, { method: "post" });
   };
 
-  // ✅ Watch for successful save
   useEffect(() => {
     if (fetcher.data?.success) {
       setSaved(true);
@@ -74,7 +86,6 @@ export default function SettingsPage() {
         </s-button>
       </s-section>
 
-      {/* AI Model Selection (Plain HTML) */}
       <s-section spacing="loose">
         <s-card padding="base">
           <s-text variant="headingMd">Select AI Model</s-text>
@@ -125,7 +136,6 @@ export default function SettingsPage() {
             Save Settings
           </s-button>
 
-          {/* ✅ Success message */}
           {saved && (
             <s-text style={{ color: "green", marginLeft: "12px" }}>
               Settings saved successfully!
