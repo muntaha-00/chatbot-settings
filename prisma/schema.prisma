@@ -42,9 +42,13 @@ model chatbotSettings {
 
 
 model ChatbotQuestion {
-  id        Int      @id @default(autoincrement())
-  question  String
-  shop      String
-  createdAt DateTime @default(now())
+  id           Int      @id @default(autoincrement())
+  question     String
+  answer       String?
+  productId    String?
+  productTitle String?
+  customerName String?
+  shop         String
+  createdAt    DateTime @default(now())
 }
 

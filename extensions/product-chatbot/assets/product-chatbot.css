@@ -1,0 +1,5 @@
+.product-chatbot { display:block; position:fixed; bottom:24px; right:24px; z-index:9999; }
+.product-chatbot .chat-messages { max-height:300px; overflow:auto; }
+.message { margin:6px 0; padding:8px 12px; border-radius:12px; }
+.message-user { background:#007bff; color:#fff; text-align:right; }
+.message-bot  { background:#f1f0f0;  color:#000; text-align:left; }
