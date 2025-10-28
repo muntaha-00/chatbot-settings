@@ -31,24 +31,44 @@ model Session {
   emailVerified Boolean?  @default(false)
 }
 
-model chatbotSettings {
-  id        Int      @id @default(autoincrement())
-  shop      String?
-  botName   String
-  model     String   @default("openai") 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model ChatbotSettings {
+  id              String   @id @default(cuid())
+  shop            String   @unique
+  chatbotName     String
+  welcomeMessage  String
+  primaryColor    String   @default("#007bff")
+  position        String   @default("bottom-right")
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
-
 model ChatbotQuestion {
-  id           Int      @id @default(autoincrement())
-  question     String
-  answer       String?
-  productId    String?
-  productTitle String?
-  customerName String?
-  shop         String
-  createdAt    DateTime @default(now())
+  id            String   @id @default(cuid())
+  shop          String
+  question      String
+  answer        String
+  productId     String?
+  productTitle  String?
+  customerName  String?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([shop])
+  @@index([shop, isActive])
+}
+
+// OPTIONAL: For analytics
+model ChatbotInteraction {
+  id          String   @id @default(cuid())
+  shop        String
+  productId   String?
+  question    String
+  answer      String
+  matched     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+
+  @@index([shop, createdAt])
 }
 

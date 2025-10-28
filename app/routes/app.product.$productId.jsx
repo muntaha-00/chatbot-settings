@@ -1,7 +1,7 @@
-// app/routes/app.product.$productId.jsx
 import { useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import { boundary } from "@shopify/shopify-app-react-router/server";
+import { json } from "../utils/response.js";
 
 export const loader = async ({ params, request }) => {
   const { admin } = await authenticate.admin(request);
@@ -38,7 +38,7 @@ export const loader = async ({ params, request }) => {
     throw new Response("Product not found", { status: 404 });
   }
 
-  return { product: data.data.product };
+  return json({ product: data.data.product });
 };
 
 export default function ProductDetail() {
@@ -123,7 +123,7 @@ export function ErrorBoundary() {
     <s-page heading="Product Not Found">
       <s-card>
         <s-text variant="headingMd">404 - Product Not Found</s-text>
-        <s-text>The product could not be loaded or doesn’t exist.</s-text>
+        <s-text>The product could not be loaded or doesn't exist.</s-text>
       </s-card>
     </s-page>
   );

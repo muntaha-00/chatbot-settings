@@ -1,23 +1,29 @@
-{% comment %} ...existing code... {% endcomment %}
 {% schema %}
 {
   "name": "Product Chatbot",
   "target": "section",
   "settings": [
-    {"type":"header","content":"Chatbot Settings"},
-    {"type":"checkbox","id":"enable_chatbot","label":"Enable Chatbot","default":true}
+    {
+      "type": "header",
+      "content": "Chatbot Settings"
+    },
+    {
+      "type": "checkbox",
+      "id": "enable_chatbot",
+      "label": "Enable Chatbot",
+      "default": true
+    }
   ]
 }
 {% endschema %}
 
 {% if template == 'product' and block.settings.enable_chatbot %}
   <div id="product-chatbot" 
-       class="product-chatbot-root"
        data-product-id="{{ product.id }}"
        data-product-title="{{ product.title }}"
-       data-shopify-customer="{{ customer.id }}">
+       data-shop="{{ shop.domain }}">
   </div>
 
   {{ 'product-chatbot.css' | asset_url | stylesheet_tag }}
-  {{ 'product-chatbot.js'  | asset_url | script_tag }}
+  {{ 'product-chatbot.js' | asset_url | script_tag }}
 {% endif %}

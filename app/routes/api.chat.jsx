@@ -1,55 +1,150 @@
-// app/api/chat.jsx
-import { prisma } from "../db.server";
+import { authenticate } from "../shopify.server";
+import prisma from "../db.server";
+import { json } from "../utils/response.js";
 
-// Helper to return JSON response
-function json(data, init = {}) {
-  const headers = new Headers(init.headers || {});
-  if (!headers.has("Content-Type")) {
-    headers.set("Content-Type", "application/json");
-  }
-  return new Response(JSON.stringify(data), { ...init, headers });
-}
-
-// Chatbot API endpoint
-export async function action({ request }) {
+export const loader = async ({ request }) => {
   try {
-    const body = await request.json();
-    const { message, productId, productTitle, customerName, shop } = body;
-
-    if (!message) {
-      return json({ error: "Missing message" }, { status: 400 });
+    const { session } = await authenticate.admin(request);
+    const shop = session?.shop;
+    
+    if (!shop) {
+      return json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Optional: get chatbot settings for this shop
-    const setting = shop
-      ? await prisma.chatbotSettings.findFirst({ where: { shop } })
-      : null;
-
-    // Example reply logic (you can replace with AI later)
-    let reply = "Sorry, I didn’t understand that.";
-
-    const lowerMsg = message.toLowerCase();
-    if (lowerMsg.includes("price")) {
-      reply = `The price of "${productTitle || "this product"}" depends on customization options.`;
-    } else if (lowerMsg.includes("hello") || lowerMsg.includes("hi")) {
-      reply = `Hi ${customerName || "there"}! How can I help you with ${productTitle || "this product"} today?`;
-    }
-
-    // Save conversation (optional)
-    await prisma.chatbotQuestion.create({
-      data: {
-        question: message,
-        answer: reply,
-        productId: productId || null,
-        productTitle: productTitle || null,
-        customerName: customerName || "Guest",
-        shop: shop || "unknown",
+    const questions = await prisma.chatbotQuestion.findMany({
+      where: { shop, isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        question: true,
+        answer: true,
+        productId: true,
+        productTitle: true,
+        customerName: true,
       },
     });
 
-    return json({ reply });
+    return json({ questions });
   } catch (error) {
-    console.error("Chatbot API error:", error);
-    return json({ error: "Internal server error" }, { status: 500 });
+    console.error("❌ Error in chat API loader:", error);
+    return json({ error: "Internal Server Error" }, { status: 500 });
   }
-}
+};
+
+export const action = async ({ request }) => {
+  try {
+    const data = await request.json();
+    
+    const isAdminSave = Array.isArray(data.questions);
+    const isStorefrontQuery = data.question && typeof data.question === "string";
+
+    // ADMIN: Save/update chatbot Q&A
+    if (isAdminSave) {
+      const { session } = await authenticate.admin(request);
+      const shop = session?.shop;
+      
+      if (!shop) {
+        return json({ error: "Unauthorized" }, { status: 401 });
+      }
+
+      const { questions } = data;
+
+      if (!Array.isArray(questions)) {
+        return json({ error: "Invalid questions format" }, { status: 400 });
+      }
+
+      const validQuestions = questions.filter(q => {
+        const question = String(q.question || "").trim();
+        const answer = String(q.answer || "").trim();
+        return question.length > 0 && answer.length > 0;
+      });
+
+      if (validQuestions.length === 0 && questions.length > 0) {
+        return json({ 
+          error: "All questions must have both question and answer text" 
+        }, { status: 400 });
+      }
+
+      await prisma.$transaction([
+        prisma.chatbotQuestion.deleteMany({ where: { shop } }),
+        ...(validQuestions.length > 0 ? [
+          prisma.chatbotQuestion.createMany({
+            data: validQuestions.map((q) => ({
+              shop,
+              question: String(q.question).trim(),
+              answer: String(q.answer).trim(),
+              productId: q.productId || null,
+              productTitle: q.productTitle || null,
+              customerName: q.customerName || null,
+              isActive: q.isActive ?? true,
+            })),
+          })
+        ] : [])
+      ]);
+
+      return json({ success: true, message: "Questions saved successfully" });
+    }
+
+    // STOREFRONT: Answer customer question
+    if (isStorefrontQuery) {
+      const { shop, question, productId } = data;
+
+      if (!shop) {
+        return json({ error: "Missing shop parameter" }, { status: 400 });
+      }
+
+      const shopSettings = await prisma.chatbotSettings.findUnique({
+        where: { shop },
+      });
+
+      if (!shopSettings || !shopSettings.isActive) {
+        return json({ 
+          answer: "This chatbot is currently unavailable.",
+        });
+      }
+
+      const matchedQuestion = await prisma.chatbotQuestion.findFirst({
+        where: {
+          shop,
+          isActive: true,
+          ...(productId ? { productId } : {}),
+          question: {
+            contains: question,
+            mode: 'insensitive',
+          },
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      if (matchedQuestion) {
+        await prisma.chatbotInteraction.create({
+          data: {
+            shop,
+            productId,
+            question,
+            answer: matchedQuestion.answer,
+            matched: true,
+          },
+        }).catch(err => console.warn("⚠️ Analytics logging failed:", err));
+
+        return json({
+          answer: matchedQuestion.answer,
+          nextQuestion: null,
+        });
+      }
+
+      return json({
+        answer: "I don't have specific information about that. Would you like to speak with our support team?",
+      });
+    }
+
+    return json({ error: "Invalid request format" }, { status: 400 });
+
+  } catch (error) {
+    console.error("❌ Error in chat API action:", error);
+    return json({ 
+      error: "Internal Server Error",
+      answer: "Something went wrong. Please try again later."
+    }, { status: 500 });
+  }
+};
