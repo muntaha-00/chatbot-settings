@@ -4,7 +4,7 @@ import prisma from "../db.server";
 export async function loader({ request, params }) {
   const path = params["*"];
   
-  console.log("📡 Proxy GET request:", path);
+  console.log(" Proxy GET request:", path);
   
   if (path === "api/settings") {
     const url = new URL(request.url);
@@ -52,7 +52,7 @@ export async function action({ request, params }) {
       const { shop, question, productId } = data;
 
       if (!shop || !question) {
-        console.log("❌ Missing parameters");
+        console.log(" Missing parameters");
         return json({ 
           answer: "Missing required information."
         }, { status: 400 });
@@ -66,7 +66,7 @@ export async function action({ request, params }) {
       console.log("   Is active:", shopSettings?.isActive);
 
       if (!shopSettings || !shopSettings.isActive) {
-        console.log("❌ Shop not active or not found");
+        console.log(" Shop not active or not found");
         return json({ 
           answer: "This chatbot is currently unavailable.",
         });
@@ -162,7 +162,7 @@ export async function action({ request, params }) {
       if (bestMatch && bestScore > 0) {
         console.log("   Matched question:", bestMatch.question);
         console.log("   Answer:", bestMatch.answer);
-        console.log("\n✅ Returning matched answer");
+        console.log("\n Returning matched answer");
         console.log("=================================\n");
         
         return json({
@@ -171,7 +171,7 @@ export async function action({ request, params }) {
         });
       }
 
-      console.log("\n⚠️ No match found - returning default");
+      console.log("\n No match found - returning default");
       console.log("=================================\n");
       
       return json({
@@ -179,7 +179,7 @@ export async function action({ request, params }) {
       });
 
     } catch (error) {
-      console.error("\n❌ PROXY CHAT ERROR:");
+      console.error("\n PROXY CHAT ERROR:");
       console.error("Error type:", error.constructor.name);
       console.error("Message:", error.message);
       console.error("Stack:", error.stack);
@@ -191,6 +191,6 @@ export async function action({ request, params }) {
     }
   }
   
-  console.log("❌ Unknown path:", path);
+  console.log(" Unknown path:", path);
   return json({ error: "Not found" }, { status: 404 });
 }

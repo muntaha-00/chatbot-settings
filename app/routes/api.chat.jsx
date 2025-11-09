@@ -26,7 +26,7 @@ export const loader = async ({ request }) => {
 
     return json({ questions });
   } catch (error) {
-    console.error("❌ Error in chat API loader:", error);
+    console.error(" Error in chat API loader:", error);
     return json({ error: "Internal Server Error" }, { status: 500 });
   }
 };
@@ -125,7 +125,7 @@ export const action = async ({ request }) => {
             answer: matchedQuestion.answer,
             matched: true,
           },
-        }).catch(err => console.warn("⚠️ Analytics logging failed:", err));
+        }).catch(err => console.warn("Analytics logging failed:", err));
 
         return json({
           answer: matchedQuestion.answer,
@@ -141,7 +141,7 @@ export const action = async ({ request }) => {
     return json({ error: "Invalid request format" }, { status: 400 });
 
   } catch (error) {
-    console.error("❌ Error in chat API action:", error);
+    console.error("Error in chat API action:", error);
     return json({ 
       error: "Internal Server Error",
       answer: "Something went wrong. Please try again later."

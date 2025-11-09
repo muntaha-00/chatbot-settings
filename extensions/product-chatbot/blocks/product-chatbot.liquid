@@ -2,28 +2,258 @@
 {
   "name": "Product Chatbot",
   "target": "section",
+  "enabled_on": {
+    "templates": ["product"],
+    "groups": ["aside"]
+  },
   "settings": [
     {
       "type": "header",
-      "content": "Chatbot Settings"
+      "content": "Display Settings"
     },
     {
       "type": "checkbox",
       "id": "enable_chatbot",
       "label": "Enable Chatbot",
-      "default": true
+      "default": true,
+      "info": "Show chatbot on this page"
+    },
+    {
+      "type": "select",
+      "id": "position",
+      "label": "Position",
+      "options": [
+        {
+          "value": "bottom-right",
+          "label": "Bottom Right"
+        },
+        {
+          "value": "bottom-left",
+          "label": "Bottom Left"
+        },
+        {
+          "value": "top-right",
+          "label": "Top Right"
+        },
+        {
+          "value": "top-left",
+          "label": "Top Left"
+        }
+      ],
+      "default": "bottom-right",
+      "info": "Where to display the chatbot"
+    },
+    {
+      "type": "range",
+      "id": "widget_width",
+      "label": "Widget Width",
+      "min": 300,
+      "max": 500,
+      "step": 25,
+      "unit": "px",
+      "default": 400,
+      "info": "Width of the chatbot window"
+    },
+    {
+      "type": "range",
+      "id": "widget_height",
+      "label": "Widget Height",
+      "min": 400,
+      "max": 700,
+      "step": 50,
+      "unit": "px",
+      "default": 550,
+      "info": "Height of the chatbot window"
+    },
+    {
+      "type": "header",
+      "content": "Appearance"
+    },
+    {
+      "type": "color",
+      "id": "primary_color",
+      "label": "Primary Color",
+      "default": "#007bff",
+      "info": "Header and button color"
+    },
+    {
+      "type": "color",
+      "id": "text_color",
+      "label": "Header Text Color",
+      "default": "#ffffff",
+      "info": "Text color on header"
+    },
+    {
+      "type": "color",
+      "id": "bot_message_bg",
+      "label": "Bot Message Background",
+      "default": "#e5e7eb",
+      "info": "Background color for bot messages"
+    },
+    {
+      "type": "color",
+      "id": "bot_message_text",
+      "label": "Bot Message Text",
+      "default": "#1f2937",
+      "info": "Text color for bot messages"
+    },
+    {
+      "type": "range",
+      "id": "border_radius",
+      "label": "Border Radius",
+      "min": 0,
+      "max": 30,
+      "step": 2,
+      "unit": "px",
+      "default": 12,
+      "info": "Roundness of corners"
+    },
+    {
+      "type": "header",
+      "content": "Content"
+    },
+    {
+      "type": "text",
+      "id": "chatbot_title",
+      "label": "Chatbot Title",
+      "default": "Store Assistant",
+      "info": "Name shown in header"
+    },
+    {
+      "type": "textarea",
+      "id": "welcome_message",
+      "label": "Welcome Message",
+      "default": "Hi! How can I help you today?",
+      "info": "First message customers see"
+    },
+    {
+      "type": "text",
+      "id": "input_placeholder",
+      "label": "Input Placeholder",
+      "default": "Ask about this product...",
+      "info": "Text shown in input field"
+    },
+    {
+      "type": "text",
+      "id": "send_button_text",
+      "label": "Send Button Text",
+      "default": "Send",
+      "info": "Text on send button"
+    },
+    {
+      "type": "header",
+      "content": "Behavior"
+    },
+    {
+      "type": "checkbox",
+      "id": "auto_open",
+      "label": "Auto-open on page load",
+      "default": false,
+      "info": "Automatically expand chatbot when page loads"
+    },
+    {
+      "type": "range",
+      "id": "auto_open_delay",
+      "label": "Auto-open Delay",
+      "min": 0,
+      "max": 30,
+      "step": 1,
+      "unit": "s",
+      "default": 5,
+      "info": "Seconds to wait before auto-opening"
+    },
+    {
+      "type": "checkbox",
+      "id": "show_on_mobile",
+      "label": "Show on Mobile",
+      "default": true,
+      "info": "Display chatbot on mobile devices"
+    },
+    {
+      "type": "checkbox",
+      "id": "minimize_button",
+      "label": "Show Minimize Button",
+      "default": true,
+      "info": "Allow customers to minimize chatbot"
+    },
+    {
+      "type": "header",
+      "content": "Advanced"
+    },
+    {
+      "type": "range",
+      "id": "z_index",
+      "label": "Z-Index (Layer Priority)",
+      "min": 1000,
+      "max": 9900,
+      "step": 100,
+      "default": 9900,
+      "info": "Higher values appear above other elements"
     }
   ]
 }
 {% endschema %}
 
-{% if template == 'product' and block.settings.enable_chatbot %}
-  <div id="product-chatbot" 
-       data-product-id="{{ product.id }}"
-       data-product-title="{{ product.title }}"
-       data-shop="{{ shop.domain }}">
+{% if block.settings.enable_chatbot %}
+  {% liquid
+    # Assign all settings to variables for cleaner code
+    assign position = block.settings.position
+    assign width = block.settings.widget_width
+    assign height = block.settings.widget_height
+    assign primary_color = block.settings.primary_color
+    assign text_color = block.settings.text_color
+    assign bot_bg = block.settings.bot_message_bg
+    assign bot_text = block.settings.bot_message_text
+    assign border_radius = block.settings.border_radius
+    assign chatbot_title = block.settings.chatbot_title
+    assign welcome_msg = block.settings.welcome_message
+    assign placeholder = block.settings.input_placeholder
+    assign send_text = block.settings.send_button_text
+    assign auto_open = block.settings.auto_open
+    assign auto_delay = block.settings.auto_open_delay
+    assign show_mobile = block.settings.show_on_mobile
+    assign minimize_btn = block.settings.minimize_button
+    assign z_index = block.settings.z_index
+  %}
+
+  <div 
+    id="product-chatbot" 
+    class="product-chatbot-container"
+    data-product-id="{{ product.id }}"
+    data-product-title="{{ product.title }}"
+    data-shop="{{ shop.domain }}"
+    data-position="{{ position }}"
+    data-width="{{ width }}"
+    data-height="{{ height }}"
+    data-primary-color="{{ primary_color }}"
+    data-text-color="{{ text_color }}"
+    data-bot-bg="{{ bot_bg }}"
+    data-bot-text="{{ bot_text }}"
+    data-border-radius="{{ border_radius }}"
+    data-title="{{ chatbot_title }}"
+    data-welcome="{{ welcome_msg }}"
+    data-placeholder="{{ placeholder }}"
+    data-send-text="{{ send_text }}"
+    data-auto-open="{{ auto_open }}"
+    data-auto-delay="{{ auto_delay }}"
+    data-show-mobile="{{ show_mobile }}"
+    data-minimize="{{ minimize_btn }}"
+    data-z-index="{{ z_index }}"
+    style="--chatbot-primary: {{ primary_color }}; --chatbot-text: {{ text_color }}; --chatbot-bot-bg: {{ bot_bg }}; --chatbot-bot-text: {{ bot_text }}; --chatbot-radius: {{ border_radius }}px; --chatbot-z: {{ z_index }};">
   </div>
 
   {{ 'product-chatbot.css' | asset_url | stylesheet_tag }}
   {{ 'product-chatbot.js' | asset_url | script_tag }}
+
+  <style>
+    /* Mobile visibility control */
+    {% unless show_mobile %}
+      @media (max-width: 768px) {
+        #product-chatbot {
+          display: none !important;
+        }
+      }
+    {% endunless %}
+  </style>
 {% endif %}
+
