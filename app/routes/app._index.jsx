@@ -51,6 +51,16 @@ export default function Index() {
         >
           Questionnaire
         </s-button>
+
+        <s-button
+          onClick={() => navigate("/app/form-builder")}
+          variant="secondary"
+          size="large"
+        >
+          Form Builder
+        </s-button>
+
+
       </s-stack>
     </s-page>
   );

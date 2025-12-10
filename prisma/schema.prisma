@@ -10,7 +10,7 @@ generator client {
 // See https://www.prisma.io/docs/orm/reference/prisma-schema-reference#string for more information
 datasource db {
   provider = "sqlite"
-  url      = "file:dev.sqlite"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -72,3 +72,192 @@ model ChatbotInteraction {
   @@index([shop, createdAt])
 }
 
+model Form {
+  id                   String           @id @default(cuid())
+  shop                 String
+  name                 String
+  description          String?
+  isActive             Boolean          @default(true)
+
+  // TEMPLATE FIELDS
+  isTemplate          Boolean  @default(false)
+  templateName        String?
+  templateDescription String?  
+  
+  // Canvas settings - stored as JSON (TEXT type for larger content)
+  // Formula settings: formula, formulaLabel, minFormulaValue, formulaDecimals, formulaPrefix, formulaSuffix
+  formulaSettings      String?          
+  
+  // Product settings: showOnAllProducts, selectedProducts[]
+  productSettings      String?          
+  
+  // Non-product pages: pages[] with pageName, pageUrl, elementSelector
+  nonProductSettings   String?          
+  
+  // Advanced settings: archiveCalculator, availableAtAllLocations, skuSameAsProduct, 
+  // variantWeightCalculation, variantCostCalculation
+  advancedSettings     String?          
+  
+  // Calculator-specific settings (for calculator functionality)
+  calculatorSettings   String?          // Stores calculator-specific configuration as JSON
+  
+  fields               FormField[]
+  submissions          FormSubmission[]
+  calculatorResults    CalculatorResult[]
+  createdAt            DateTime         @default(now())
+  updatedAt            DateTime         @updatedAt
+
+  
+  @@index([shop])
+  @@index([shop, isActive])
+  @@index([isTemplate])  // NEW INDEX for filtering
+}
+
+model FormField {
+  id          String   @id @default(cuid())
+  formId      String
+  form        Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  
+  // Field type: heading, dropdown, image_selector, data_lookup, text_block, text_input, 
+  // checkbox, number_input, calculation_display, file_upload, photo_editor, radio
+  type        String
+  
+  label       String
+  placeholder String?
+  required    Boolean  @default(false)
+  
+  // Stores STYLES as JSON (typography, colors, layout, spacing, borders)
+  // Typography: fontFamily, fontSize, fontWeight, lineHeight, letterSpacing, textAlign
+  // Colors: textColor, bgColor
+  // Layout: width, height, padding, marginBottom
+  // Borders: borderColor, borderWidth, borderRadius
+  options     String?  
+  
+  // Stores ELEMENT-SPECIFIC DATA as JSON:
+  // - tooltip: { enabled, text }
+  // - conditionalDisplay: { enabled, valueWhenNotDisplayed, triggerElementId }
+  // - additionalInfo: string
+  // - content: { text } for heading, { heading, richText } for text_block
+  // - options: [{ id, name, value, image? }] for dropdown/radio/checkbox/image_selector
+  // - settings: varies by element type (see element definitions)
+  // - valueRanges: [{ id, start, end, value }] for number_input
+  // - buttonStyle: { buttonText, bgColor, textColor } for photo_editor
+  // - tableData: { fileName, data[], uploadDate, headers[] } for data_lookup
+  metadata    String?  
+  
+  order       Int      @default(0)
+  
+  // For calculator functionality
+  calculatorValue  String?  // Stores calculated value or formula reference
+  isQuantity      Boolean  @default(false) // Whether this field represents quantity
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([formId])
+  @@index([formId, order])
+}
+
+model FormSubmission {
+  id        String   @id @default(cuid())
+  formId    String
+  form      Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  shop      String
+  
+  // Stores all form field values as JSON
+  // Structure: { fieldId: value, fieldId: value, ... }
+  data      String
+  
+  // Additional metadata for submissions
+  customerEmail    String?
+  customerName     String?
+  orderNumber      String?  // If submitted as part of an order
+  
+  createdAt DateTime @default(now())
+
+  @@index([formId])
+  @@index([shop, createdAt])
+  @@index([orderNumber])
+}
+
+// model for storing calculator results and pricing calculations
+model CalculatorResult {
+  id                String   @id @default(cuid())
+  formId            String
+  form              Form     @relation(fields: [formId], references: [id], onDelete: Cascade)
+  shop              String
+  
+  // Input values used in calculation (stored as JSON)
+  inputValues       String
+  
+  // Calculated results (stored as JSON)
+  // Structure: { totalPrice, quantity, breakdown: {...}, formula: "..." }
+  calculatedResults String
+  
+  // Associated product/variant info
+  productId         String?
+  variantId         String?
+  
+  // Customer info
+  customerId        String?
+  sessionId         String?
+  
+  createdAt         DateTime @default(now())
+  
+  @@index([formId])
+  @@index([shop, createdAt])
+  @@index([productId])
+}
+
+// Model for storing pricing rules and formulas
+model PricingRule {
+  id          String   @id @default(cuid())
+  shop        String
+  name        String
+  description String?
+  
+  // Rule type: fixed, percentage, tiered, formula-based
+  ruleType    String
+  
+  // Rule configuration (stored as JSON)
+  // For tiered: [{ min, max, pricePerUnit }, ...]
+  // For formula: { formula, variables: {...} }
+  config      String
+  
+  // Associated forms/calculators
+  formIds     String?  // Comma-separated list or JSON array
+  
+  isActive    Boolean  @default(true)
+  priority    Int      @default(0)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([shop])
+  @@index([shop, isActive])
+}
+
+// Model for tracking calculator analytics
+model CalculatorAnalytics {
+  id              String   @id @default(cuid())
+  shop            String
+  formId          String
+  
+  // Event type: view, interaction, submission, calculation
+  eventType       String
+  
+  // Event data (stored as JSON)
+  eventData       String?
+  
+  // Session tracking
+  sessionId       String?
+  customerId      String?
+  
+  // Product context
+  productId       String?
+  
+  createdAt       DateTime @default(now())
+  
+  @@index([shop, formId, createdAt])
+  @@index([eventType])
+}
