@@ -1,9 +1,10 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { json } from "../utils/response";
 import * as XLSX from "xlsx";
+
 
 
 
@@ -183,7 +184,14 @@ const ELEMENTS = [
       input2MinValue: "0",
       input2MaxValue: "10000",
     },
-    defaultTableData: null, //stores excel data as json
+    defaultTableData: {
+      columnHeaders: ['100', '1000', '2500', '5000'], //4 default coumns
+      rows: [
+        {id: 1, header: '10', values: ['','','','']},
+        {id: 2, header: '20', values: ['','','','']},
+        {id: 3, header: '30', values: ['','','','']}
+      ]
+    },
     defaultConditionalDisplay: {
       enabled: false,
       valueWhenNotDisplayed: "1",
@@ -556,12 +564,6 @@ export default function FormBuilderEditor() {
               ],
           };
 
-        case "heading": 
-        return {
-          ...baseComponent,
-          content: parsedMetadata.content || {text: "Form Heading"},
-        };
-
         case "image_selector":
           return {
             ...baseComponent,
@@ -930,68 +932,109 @@ export default function FormBuilderEditor() {
     });
   };
 
-  // handle excel file upload
-  const handleExcelUpload = (e, onUpdateTableData) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+//state to track drag operations
+const [draggedIndex, setDraggedIndex] = useState(null);
+const [dragOverIndex, setDragOverIndex] = useState(null);
 
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const data = evt.target.result;
-        const workbook = XLSX.read(data, { type: "binary" });
 
-        // get first sheet
-        const sheetName = workbook.SheetNames[0];
-        const workSheet = workbook.Sheets[sheetName];
-
-        // convert to JSON
-        const jsonData = XLSX.utils.sheet_to_json(workSheet);
-
-        onUpdateTableData({
-          fileName: file.name,
-          data: jsonData,
-          uploadDate: new Date().toISOString(),
-          headers: Object.keys(jsonData[0] || {}),
-        });
-      } catch (error) {
-        console.error("Error reading Excel file:", error);
-        alert("Error reading Excel Sheet. Please make sure it's a valid excel file");
-      }
-    };
-    reader.readAsBinaryString(file);
-  };
-
-  // drag & drop helpers
+// Sidebar element drag start (new elements)
 const handleDragStart = (e, type) => {
   e.dataTransfer.effectAllowed = "copy";
-  e.dataTransfer.setData("text/plain", `type:${type}`);
-  console.log("Drag started(sidebar):", type);
+  e.dataTransfer.setData("application/json", JSON.stringify({ source: "sidebar", type }));
+  console.log("Drag started (sidebar):", type);
 };
 
+// Canvas component drag start (reordering)
 const handleComponentDragStart = (e, index) => {
+  e.stopPropagation();
   e.dataTransfer.effectAllowed = "move";
-  e.dataTransfer.setData("text/plain", `move:${index}`);
+  e.dataTransfer.setData("application/json", JSON.stringify({ source: "canvas", index }));
+  setDraggedIndex(index);
   console.log("Component drag started (canvas):", index);
 };
 
-//main canvas drop handler(for new elements from sidebar)
+// Main canvas drop handler (for new elements from sidebar or dropping to empty area)
 const handleDrop = (e) => {
   e.preventDefault();
   e.stopPropagation();
 
-  const data = e.dataTransfer.getData("text/plain");
-  console.log("Drop received (canvas):", data);
+  try {
+    const data = JSON.parse(e.dataTransfer.getData("application/json"));
+    console.log("Drop received (canvas):", data);
 
-  // Check if it's a new component from sidebar
-  if (data && data.startsWith("type:")) {
-    const type = data.split(":")[1];
-    if (type) {
-      addComponent(type);
+    // New component from sidebar -> insert at end (or beginning for heading)
+    if (data.source === "sidebar") {
+      const elementDef = ELEMENTS.find((el) => el.type === data.type);
+      if (!elementDef) return;
+
+      if (data.type === "heading") {
+        const headingExists = components.some((c) => c.type === "heading");
+        if (headingExists) {
+          alert("Only one heading is allowed per form");
+          return;
+        }
+      }
+
+      const id = `temp-${Date.now()}`;
+      const newComp = {
+        id,
+        type: elementDef.type,
+        label: elementDef.label,
+        placeholder: "",
+        required: false,
+        styles: elementDef.defaultStyles || {},
+        ...(elementDef.defaultOptions ? { options: elementDef.defaultOptions } : {}),
+        ...(elementDef.defaultSettings ? { settings: elementDef.defaultSettings } : {}),
+        ...(elementDef.defaultContent ? { content: elementDef.defaultContent } : {}),
+        ...(elementDef.defaultTooltip ? { tooltip: elementDef.defaultTooltip } : {}),
+        ...(elementDef.defaultButtonStyle ? { buttonStyle: elementDef.defaultButtonStyle } : {}),
+        ...(elementDef.defaultTableData !== undefined ? { tableData: elementDef.defaultTableData } : {}),
+        ...(elementDef.defaultValueRanges ? { valueRanges: elementDef.defaultValueRanges } : {}),
+        additionalInfo: elementDef.additionalInfo || "",
+        conditionalDisplay: elementDef.defaultConditionalDisplay || {
+          enabled: false,
+          valueWhenNotDisplayed: "1",
+          triggerElementId: null,
+        },
+      };
+
+      setComponents((prev) => {
+        const next = [...prev];
+        if (data.type === "heading") {
+          next.unshift(newComp);
+          setSelectedComponentIndex(0);
+        } else {
+          next.push(newComp);
+          setSelectedComponentIndex(next.length - 1);
+        }
+        return next;
+      });
+
+      setActiveTab("properties");
+      setDragOverIndex(null);
+      return;
     }
-  }
-};
 
+    // Dropping an existing canvas item onto the empty area -> move it to the end
+    if (data.source === "canvas") {
+      const fromIndex = data.index;
+      if (fromIndex === undefined) return;
+
+      setComponents((prev) => {
+        const copy = [...prev];
+        const [moved] = copy.splice(fromIndex, 1);
+        copy.push(moved);
+        return copy;
+      });
+
+      setSelectedComponentIndex(components.length - 1);
+    }
+  } catch (error) {
+    console.error("Drop error:", error);
+  }
+
+  setDragOverIndex(null);
+};
 
 const handleDragOver = (e) => {
   e.preventDefault();
@@ -999,39 +1042,131 @@ const handleDragOver = (e) => {
   e.dataTransfer.dropEffect = "copy";
 };
 
+// Component drop handler (for reordering)
 const handleComponentDrop = (e, dropIndex) => {
   e.preventDefault();
   e.stopPropagation();
 
-  const data = e.dataTransfer.getData("text/plain");
-  
+  try {
+    const data = JSON.parse(e.dataTransfer.getData("application/json"));
+    console.log("Component drop:", data, "at index:", dropIndex);
 
-  // Only process reorder operations (starts with move)
-  if (!data || !data.startsWith("move:")) {
-  return;
+    // determine whether user dropped above or below the hovered element
+    const rect = e.currentTarget.getBoundingClientRect();
+    const offsetY = e.clientY - rect.top;
+    const insertAfter = offsetY > rect.height / 2;
+    const targetIndex = insertAfter ? dropIndex + 1 : dropIndex;
+
+    if (data.source === "sidebar") {
+      // New element from sidebar - insert at specific position
+      const elementDef = ELEMENTS.find((el) => el.type === data.type);
+      if (!elementDef) return;
+
+      // Check if it's a heading element and if one already exists
+      if (data.type === "heading") {
+        const headingExists = components.some(c => c.type === "heading");
+        if (headingExists) {
+          alert("Only one heading is allowed per form");
+          return;
+        }
+      }
+
+      const id = `temp-${Date.now()}`;
+      const newComp = {
+        id,
+        type: elementDef.type,
+        label: elementDef.label,
+        placeholder: "",
+        required: false,
+        styles: elementDef.defaultStyles || {},
+        ...(elementDef.defaultOptions ? { options: elementDef.defaultOptions } : {}),
+        ...(elementDef.defaultSettings ? { settings: elementDef.defaultSettings } : {}),
+        ...(elementDef.defaultContent ? { content: elementDef.defaultContent } : {}),
+        ...(elementDef.defaultTooltip ? { tooltip: elementDef.defaultTooltip } : {}),
+        ...(elementDef.defaultButtonStyle ? { buttonStyle: elementDef.defaultButtonStyle } : {}),
+        ...(elementDef.defaultTableData !== undefined ? { tableData: elementDef.defaultTableData } : {}),
+        ...(elementDef.defaultValueRanges ? { valueRanges: elementDef.defaultValueRanges } : {}),
+        additionalInfo: elementDef.additionalInfo || "",
+        conditionalDisplay: elementDef.defaultConditionalDisplay || {
+          enabled: false,
+          valueWhenNotDisplayed: "1",
+          triggerElementId: null
+        },
+      };
+
+      setComponents((prev) => {
+        const next = [...prev];
+        // If heading, always insert at beginning
+        if (data.type === "heading") {
+          next.unshift(newComp);
+          setSelectedComponentIndex(0);
+        } else {
+          // Insert at computed target position (before/after hovered item)
+          next.splice(targetIndex, 0, newComp);
+          setSelectedComponentIndex(targetIndex);
+        }
+        return next;
+      });
+
+      setActiveTab("properties");
+    } else if (data.source === "canvas") {
+      // Reordering existing component
+      const fromIndex = data.index;
+
+      if (fromIndex === undefined) return;
+
+      // If dropping to same visual spot do nothing
+      if (fromIndex === targetIndex || fromIndex === targetIndex - 1) {
+        return;
+      }
+
+      console.log(`Reordering: index ${fromIndex} -> ${targetIndex}`);
+
+      setComponents((prev) => {
+        const copy = [...prev];
+        const [moved] = copy.splice(fromIndex, 1);
+
+        // Adjust insertion index because removal may shift positions
+        const adjustedDropIndex = fromIndex < targetIndex ? targetIndex - 1 : targetIndex;
+        copy.splice(adjustedDropIndex, 0, moved);
+
+        return copy;
+      });
+
+      // compute final selected index after move
+      const finalIndex = fromIndex < targetIndex ? targetIndex - 1 : targetIndex;
+      setSelectedComponentIndex(finalIndex);
+    }
+  } catch (error) {
+    console.error("Component drop error:", error);
   }
-  
-  const fromIndex = parseInt(data.split(":")[1], 10);
 
-  if (isNaN(fromIndex) || fromIndex === dropIndex) {
-    return;
-  }
-
-  console.log(`Reordering: index ${fromIndex} -> ${dropIndex}`);
-
-  setComponents((prev) => {
-    const copy = [...prev];
-    const [moved] = copy.splice(fromIndex, 1);
-    copy.splice(dropIndex, 0, moved);
-    return copy;
-  });
-  
+  setDraggedIndex(null);
+  setDragOverIndex(null);
 };
 
-const handleComponentDragOver = (e) => {
+const handleComponentDragOver = (e, index) => {
   e.preventDefault();
   e.stopPropagation();
-  e.dataTransfer.dropEffect = "move";
+  
+  try {
+    const data = JSON.parse(e.dataTransfer.getData("application/json"));
+    
+    if (data.source === "canvas") {
+      e.dataTransfer.dropEffect = "move";
+    } else {
+      e.dataTransfer.dropEffect = "copy";
+    }
+    
+    setDragOverIndex(index);
+  } catch (error) {
+    e.dataTransfer.dropEffect = "copy";
+  }
+};
+
+const handleComponentDragEnd = () => {
+  setDraggedIndex(null);
+  setDragOverIndex(null);
 };
 
   // ----- save -----
@@ -1145,8 +1280,9 @@ const handleComponentDragOver = (e) => {
               key={component.id || index}
               draggable={true}
               onDragStart={(e) => handleComponentDragStart(e, index)}
-              onDragOver={handleComponentDragOver}
+              onDragOver={(e) => handleComponentDragOver(e, index)}
               onDrop={(e) => handleComponentDrop(e, index)}
+              onDragEnd={handleComponentDragEnd}
               onClick={() => {
                 setSelectedComponentIndex(index);
                 setActiveTab("properties");
@@ -1154,7 +1290,13 @@ const handleComponentDragOver = (e) => {
               style={{
                 ...styles.componentWrapper,
                 ...(selectedComponentIndex === index ? styles.componentWrapperSelected : {}),
+                ...(draggedIndex === index ? { opacity: 0.5 } : {}),
+                ...(dragOverIndex === index && draggedIndex !== index ? { 
+                  borderTop: "3px solid #3b82f6",
+                  marginTop: "8px"
+                } : {}),
                 cursor: "grab",
+                transition: "all 0.2s ease",
               }}
               onMouseDown={(e) => {
                 e.currentTarget.style.cursor = "grabbing";
@@ -1163,6 +1305,15 @@ const handleComponentDragOver = (e) => {
                 e.currentTarget.style.cursor = "grab";
               }}
             >
+              {/* Drag handle so interactive inner elements don't block drag */}
+              <div
+                draggable
+                onDragStart={(e) => { e.stopPropagation(); handleComponentDragStart(e, index); }}
+                style={styles.dragHandle}
+                title="Drag to reorder"
+              >
+                ☰
+              </div>
               {/* Component action buttons */}
               {selectedComponentIndex === index && (
                 <div style={styles.componentActions}>
@@ -1198,16 +1349,15 @@ const handleComponentDragOver = (e) => {
                 </div>
               )}
 
-            {/* Conditional display badge */}
-            {component.conditionalDisplay?.enabled && (
-              <div style={styles.conditionalBadge}>⚡ conditional</div>
-            )}
+              {/* Conditional display badge */}
+              {component.conditionalDisplay?.enabled && (
+                <div style={styles.conditionalBadge}>⚡ conditional</div>
+              )}
 
-            {/* Render the component */}
-            <RenderComponent component={component} preview={false} />
+              {/* Render the component */}
+              <RenderComponent component={component} preview={false} />
             </div>
           ))}
-
         </div>
       )}
 
@@ -1579,6 +1729,1294 @@ function ElementsPanel({ onDragStart, onAdd }) {
     </div>
   );
 }
+
+//=============photoeditor panel================
+function PhotoEditorModal({ isOpen, onClose, onSave, initialImage = null }) {
+  const canvasRef = useRef(null);
+  const [image, setImage] = useState(null);
+  const [rotation, setRotation] = useState(0);
+  const [flipH, setFlipH] = useState(false);
+  const [flipV, setFlipV] = useState(false);
+  const [brightness, setBrightness] = useState(100);
+  const [contrast, setContrast] = useState(100);
+  const [currentFilter, setCurrentFilter] = useState(null);
+  const [zoom, setZoom] = useState(1);
+  const [texts, setTexts] = useState([]);
+  const [textMode, setTextMode] = useState(false);
+  const [textInput, setTextInput] = useState('');
+  const [textColor, setTextColor] = useState('#000000');
+  // crop & resize state
+  const [cropMode, setCropMode] = useState(false);
+  const [selection, setSelection] = useState(null); // { x, y, w, h }
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStartRef = useRef(null);
+  const [resizeW, setResizeW] = useState('');
+  const [resizeH, setResizeH] = useState('');
+
+  useEffect(() => {
+    if (isOpen && initialImage) {
+      const img = new Image();
+      img.onload = () => setImage(img);
+      img.src = initialImage;
+    }
+  }, [isOpen, initialImage]);
+
+  useEffect(() => {
+    if (image) drawCanvas();
+  }, [image, rotation, flipH, flipV, brightness, contrast, currentFilter, texts, zoom]);
+
+  const drawCanvas = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !image) return;
+
+    const ctx = canvas.getContext('2d');
+    canvas.width = 800;
+    canvas.height = 600;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    ctx.translate(centerX, centerY);
+    ctx.rotate((rotation * Math.PI) / 180);
+    ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
+    ctx.scale(zoom, zoom);
+
+    const scale = Math.min((canvas.width * 0.9) / image.width, (canvas.height * 0.9) / image.height);
+    const imgWidth = image.width * scale;
+    const imgHeight = image.height * scale;
+
+    ctx.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
+    if (currentFilter === 'grayscale') ctx.filter += ' grayscale(100%)';
+    if (currentFilter === 'sepia') ctx.filter += ' sepia(100%)';
+    if (currentFilter === 'blur') ctx.filter += ' blur(3px)';
+
+    ctx.drawImage(image, -imgWidth / 2, -imgHeight / 2, imgWidth, imgHeight);
+    ctx.restore();
+
+    // draw selection rectangle if in crop mode
+    if (selection) {
+      const { x, y, w, h } = selection;
+      ctx.save();
+      ctx.strokeStyle = '#3b82f6';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(x, y, w, h);
+      ctx.restore();
+    }
+
+    texts.forEach(text => {
+      ctx.font = `${text.size}px Arial`;
+      ctx.fillStyle = text.color;
+      ctx.fillText(text.text, text.x, text.y);
+    });
+  };
+
+  // Mouse handlers for crop selection (coordinates in canvas space)
+  const toCanvasCoords = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    const x = Math.round((e.clientX - rect.left) * (canvasRef.current.width / rect.width));
+    const y = Math.round((e.clientY - rect.top) * (canvasRef.current.height / rect.height));
+    return { x, y };
+  };
+
+  const handleCanvasMouseDown = (e) => {
+    if (!cropMode) return;
+    const pos = toCanvasCoords(e);
+    dragStartRef.current = pos;
+    setIsDragging(true);
+    setSelection({ x: pos.x, y: pos.y, w: 0, h: 0 });
+  };
+
+  const handleCanvasMouseMove = (e) => {
+    if (!cropMode || !isDragging) return;
+    const pos = toCanvasCoords(e);
+    const start = dragStartRef.current;
+    const x = Math.min(start.x, pos.x);
+    const y = Math.min(start.y, pos.y);
+    const w = Math.abs(pos.x - start.x);
+    const h = Math.abs(pos.y - start.y);
+    setSelection({ x, y, w, h });
+  };
+
+  const handleCanvasMouseUp = () => {
+    if (!cropMode) return;
+    setIsDragging(false);
+  };
+
+  const applyCrop = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || !selection || selection.w === 0 || selection.h === 0) return;
+
+    const off = document.createElement('canvas');
+    off.width = selection.w;
+    off.height = selection.h;
+    const octx = off.getContext('2d');
+    octx.drawImage(canvas, selection.x, selection.y, selection.w, selection.h, 0, 0, selection.w, selection.h);
+    const dataUrl = off.toDataURL('image/png');
+    const img = new Image();
+    img.onload = () => {
+      setImage(img);
+      setSelection(null);
+      setCropMode(false);
+      setZoom(1);
+      setResizeW('');
+      setResizeH('');
+    };
+    img.src = dataUrl;
+  };
+
+  const cancelCrop = () => {
+    setSelection(null);
+    setCropMode(false);
+  };
+
+  const applyResize = () => {
+    if (!image) return;
+    const w = parseInt(resizeW, 10);
+    const h = parseInt(resizeH, 10);
+    if (!w || !h) {
+      alert('Enter valid width and height');
+      return;
+    }
+    const off = document.createElement('canvas');
+    off.width = w;
+    off.height = h;
+    const octx = off.getContext('2d');
+    octx.drawImage(image, 0, 0, w, h);
+    const dataUrl = off.toDataURL('image/png');
+    const img = new Image();
+    img.onload = () => {
+      setImage(img);
+      setZoom(1);
+      setResizeW('');
+      setResizeH('');
+    };
+    img.src = dataUrl;
+  };
+
+  const handleAddText = () => {
+    if (textInput.trim()) {
+      setTexts([...texts, { text: textInput, x: 400, y: 300, color: textColor, size: 24 }]);
+      setTextInput('');
+      setTextMode(false);
+    }
+  };
+
+  const handleReset = () => {
+    setRotation(0);
+    setFlipH(false);
+    setFlipV(false);
+    setCurrentFilter(null);
+    setBrightness(100);
+    setContrast(100);
+    setTexts([]);
+    setZoom(1);
+  };
+
+  const handleSave = () => {
+    const canvas = canvasRef.current;
+    if (canvas) {
+      // Export at the image's intrinsic pixel dimensions (preserve quality)
+      if (!image) return;
+
+      const origW = image.width;
+      const origH = image.height;
+      let outW = origW;
+      let outH = origH;
+      const rot = ((rotation % 360) + 360) % 360;
+      if (rot === 90 || rot === 270) {
+        outW = origH;
+        outH = origW;
+      }
+
+      const off = document.createElement('canvas');
+      off.width = outW;
+      off.height = outH;
+      const ctx = off.getContext('2d');
+
+      ctx.save();
+      ctx.translate(outW / 2, outH / 2);
+      ctx.rotate((rotation * Math.PI) / 180);
+      ctx.scale(flipH ? -1 : 1, flipV ? -1 : 1);
+
+      let filterStr = `brightness(${brightness}%) contrast(${contrast}%)`;
+      if (currentFilter === 'grayscale') filterStr += ' grayscale(100%)';
+      if (currentFilter === 'sepia') filterStr += ' sepia(100%)';
+      if (currentFilter === 'blur') filterStr += ' blur(3px)';
+      ctx.filter = filterStr;
+
+      ctx.drawImage(image, -image.width / 2, -image.height / 2, image.width, image.height);
+      ctx.restore();
+
+      // draw texts scaled from editor canvas space to output image space
+      const editorW = canvasRef.current?.width || 800;
+      const editorH = canvasRef.current?.height || 600;
+      const scaleX = outW / editorW;
+      const scaleY = outH / editorH;
+      const avgScale = (scaleX + scaleY) / 2;
+      texts.forEach(text => {
+        ctx.font = `${Math.round((text.size || 24) * avgScale)}px Arial`;
+        ctx.fillStyle = text.color || '#000';
+        const x = Math.round((text.x || 0) * scaleX);
+        const y = Math.round((text.y || 0) * scaleY);
+        ctx.fillText(text.text || '', x, y);
+      });
+
+      const dataUrl = off.toDataURL('image/png', 0.9);
+      onSave(dataUrl);
+      onClose();
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div style={photoEditorStyles.overlay} onClick={onClose}>
+      <div style={photoEditorStyles.modal} onClick={e => e.stopPropagation()}>
+        <div style={photoEditorStyles.header}>
+          <h2 style={photoEditorStyles.modalTitle}>📸 Photo Editor</h2>
+          <button onClick={onClose} style={photoEditorStyles.closeBtn}>✕</button>
+        </div>
+
+        <div style={photoEditorStyles.body}>
+          <div style={photoEditorStyles.canvasWrap}>
+            <canvas 
+              ref={canvasRef} 
+              style={photoEditorStyles.canvas} 
+              onMouseDown={handleCanvasMouseDown}
+              onMouseMove={handleCanvasMouseMove}
+              onMouseUp={handleCanvasMouseUp}
+            />
+          </div>
+
+          <div style={photoEditorStyles.toolbar}>
+            <div style={photoEditorStyles.toolRow}>
+              <span style={photoEditorStyles.label}>Transform:</span>
+              <button onClick={() => setRotation((rotation + 90) % 360)} style={photoEditorStyles.btn}>🔄 Rotate</button>
+              <button onClick={() => setFlipH(!flipH)} style={photoEditorStyles.btn}>↔️ Flip H</button>
+              <button onClick={() => setFlipV(!flipV)} style={photoEditorStyles.btn}>↕️ Flip V</button>
+            </div>
+
+            <div style={photoEditorStyles.toolRow}>
+              <span style={photoEditorStyles.label}>Filters:</span>
+              <button 
+                onClick={() => setCurrentFilter(currentFilter === 'grayscale' ? null : 'grayscale')} 
+                style={{...photoEditorStyles.btn, ...(currentFilter === 'grayscale' ? photoEditorStyles.btnActive : {})}}>
+                ⚫ Gray
+              </button>
+              <button 
+                onClick={() => setCurrentFilter(currentFilter === 'sepia' ? null : 'sepia')}
+                style={{...photoEditorStyles.btn, ...(currentFilter === 'sepia' ? photoEditorStyles.btnActive : {})}}>
+                🟤 Sepia
+              </button>
+              <button 
+                onClick={() => setCurrentFilter(currentFilter === 'blur' ? null : 'blur')}
+                style={{...photoEditorStyles.btn, ...(currentFilter === 'blur' ? photoEditorStyles.btnActive : {})}}>
+                💨 Blur
+              </button>
+            </div>
+
+            <div style={photoEditorStyles.toolRow}>
+              <span style={photoEditorStyles.label}>Brightness:</span>
+              <input type="range" min="0" max="200" value={brightness} onChange={e => setBrightness(e.target.value)} style={photoEditorStyles.slider} />
+              <span style={photoEditorStyles.value}>{brightness}%</span>
+            </div>
+
+            <div style={photoEditorStyles.toolRow}>
+              <span style={photoEditorStyles.label}>Contrast:</span>
+              <input type="range" min="0" max="200" value={contrast} onChange={e => setContrast(e.target.value)} style={photoEditorStyles.slider} />
+              <span style={photoEditorStyles.value}>{contrast}%</span>
+            </div>
+
+            <div style={photoEditorStyles.toolRow}>
+              <span style={photoEditorStyles.label}>Zoom:</span>
+              <button onClick={() => setZoom(Math.max(0.5, zoom - 0.1))} style={photoEditorStyles.btn}>🔍-</button>
+              <span style={photoEditorStyles.value}>{Math.round(zoom * 100)}%</span>
+              <button onClick={() => setZoom(Math.min(3, zoom + 0.1))} style={photoEditorStyles.btn}>🔍+</button>
+            </div>
+
+            <div style={photoEditorStyles.toolRow}>
+              <span style={photoEditorStyles.label}>Crop:</span>
+              <button onClick={() => { setCropMode(!cropMode); setSelection(null); }} style={{...photoEditorStyles.btn, ...(cropMode ? photoEditorStyles.btnActive : {})}}>
+                ✂️ {cropMode ? 'Exit' : 'Crop'}
+              </button>
+              {cropMode && (
+                <>
+                  <button onClick={applyCrop} style={photoEditorStyles.btn}>✅ Apply</button>
+                  <button onClick={cancelCrop} style={photoEditorStyles.btn}>✕ Cancel</button>
+                </>
+              )}
+            </div>
+
+            <div style={photoEditorStyles.toolRow}>
+              <span style={photoEditorStyles.label}>Resize:</span>
+              <input type="number" placeholder="W" value={resizeW} onChange={e=>setResizeW(e.target.value)} style={{...photoEditorStyles.input, width:80}} />
+              <input type="number" placeholder="H" value={resizeH} onChange={e=>setResizeH(e.target.value)} style={{...photoEditorStyles.input, width:80}} />
+              <button onClick={applyResize} style={photoEditorStyles.btn}>↔️ Apply</button>
+            </div>
+
+            <div style={photoEditorStyles.toolRow}>
+              {!textMode ? (
+                <button onClick={() => setTextMode(true)} style={photoEditorStyles.btn}>📝 Add Text</button>
+              ) : (
+                <>
+                  <input 
+                    type="text" 
+                    value={textInput} 
+                    onChange={e => setTextInput(e.target.value)} 
+                    placeholder="Text..." 
+                    style={photoEditorStyles.input} 
+                  />
+                  <input 
+                    type="color" 
+                    value={textColor} 
+                    onChange={e => setTextColor(e.target.value)} 
+                    style={photoEditorStyles.color} 
+                  />
+                  <button onClick={handleAddText} style={photoEditorStyles.btn}>✓</button>
+                  <button onClick={() => setTextMode(false)} style={photoEditorStyles.btn}>✕</button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div style={photoEditorStyles.footer}>
+          <button onClick={handleReset} style={photoEditorStyles.resetBtn}>🔄 Reset</button>
+          <div style={{ display: 'flex', gap: 12 }}>
+            <button onClick={onClose} style={photoEditorStyles.cancelBtn}>Cancel</button>
+            <button onClick={handleSave} style={photoEditorStyles.saveBtn}>💾 Save</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+
+//=========file upload component=================
+function FileUploadComponent({ 
+  onFileSelect, 
+  acceptedFormats = ['.jpg', '.jpeg', '.png', '.pdf'], 
+  maxSize = 10 
+}){
+    const [dragActive, setDragActive] = useState(false);
+    const [uploadedFile, setUploadedFile] = useState(null);
+    const fileInputRef = useRef(null);
+
+    const handleDrag = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if(e.type === "dragenter" || e.type === "dragover"){
+        setDragActive(true);
+      } else if (e.type === "dragleave"){
+        setDragActive(false);
+      }
+    };
+
+    const handleDrop = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setDragActive(false);
+
+      if(e.dataTransfer.files && e.dataTransfer.files[0]){
+        handleFile(e.dataTransfer.files[0]);
+      }
+    };
+
+    const handleChange = (e) => {
+      e.preventDefault();
+      if(e.target.files && e.target.files[0]){
+        handleFile(e.target.files[0]);
+      }
+    };
+
+    const handleFile = (file) => {
+      const fileSizeMB = file.size / (1024 * 1024);
+      if (fileSizeMB > maxSize) {
+        alert(`File size exceeds ${maxSize}MB limit`);
+        return;
+      }
+
+      const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+      if (!acceptedFormats.includes(fileExt)) {
+        alert(`Please upload only ${acceptedFormats.join(', ')} files`);
+        return;
+      }
+
+      setUploadedFile(file);
+
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        onFileSelect({
+          file: file,
+          dataUrl: reader.result,
+          name: file.name,
+          size: file.size,
+          type: file.type,
+        });
+      };
+      reader.readAsDataURL(file);
+    };
+
+    const handleRemove = () => {
+      setUploadedFile(null);
+      onFileSelect(null);
+      if(fileInputRef.current){
+        fileInputRef.current.value = '';
+      }
+    };
+
+    return (
+      <div style={{ width: '100%'}}>
+        {!uploadedFile ? (
+          <div style={{
+            border: dragActive ? '2px dashed #3b82f6' : '2px dashed #d1d5db',
+            borderRadius: 8,
+            padding: 40,
+            textAlign: 'center',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+            background: dragActive ? '#eff6ff' : '#f9fafb',
+          }}
+            onDragEnter={handleDrag}
+            onDragLeave={handleDrag}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept={acceptedFormats.join(',')}
+              onChange={handleChange}
+              style={{ display: 'none' }}
+            />
+            <div style={{ fontSize: 48, marginBottom: 12 }}>📤</div>
+            <div style={{ fontSize: 14, color: '#374151', marginBottom: 8 }}>
+              <strong>Click to upload</strong> or drag and drop
+            </div>
+            <div style={{ fontSize: 12, color: '#9ca3af' }}>
+              {acceptedFormats.join(', ').toUpperCase()} up to {maxSize}MB
+            </div>
+          </div>
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              padding: 16,
+              background: '#f0fdf4',
+              border: '1px solid #86efac',
+              borderRadius: 8,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontSize: 32 }}>
+                {uploadedFile.type.startsWith('image/') ? '🖼️' : '📄'}
+              </span>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 500, color: '#166534' }}>
+                  {uploadedFile.name}
+                </div>
+                <div style={{ fontSize: 12, color: '#16a34a' }}>
+                  {(uploadedFile.size / 1024).toFixed(2)} KB
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={handleRemove}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: 'none',
+                background: '#fee2e2',
+                color: '#991b1b',
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: 500,
+              }}
+            >
+              🗑️ Remove
+            </button>
+          </div>        
+        )}
+      </div>
+    );
+}
+
+//===============data lookup properties panel============
+function DataLookupPropertiesPanel({ tableData, settings, onUpdateTableData, onUpdateSettings}){
+  //showTableEditor state variable
+  //tracks whether the table editor panel is open or closed
+  const [showTableEditor, setShowTableEditor] = useState(false);
+
+  return (
+    <>
+      {/* section 1: data lookup header with update data button */}
+      <div style={propertyStyles.sectionBlue}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <label style={{ ...propertyStyles.label, marginBottom: 0 }}>📊 Data Lookup</label>
+
+          {/* toggle button: opens/closes the table editor modal */}
+          <button
+            onClick={() => setShowTableEditor(!showTableEditor)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 6,
+              border: "none",
+              background: showTableEditor ? "#ef4444" : "#3b82f6",
+              color: "#fff",
+              cursor: "pointer",
+              fontSize: 12,
+              fontWeight: 500,
+              display: "flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            {showTableEditor ? '✕ Close' : '📝 Update Data'}
+          </button>
+        </div>
+
+        {/* section 2: table status indicator */}
+        {tableData && tableData.rows && tableData.rows.length > 0 ? (
+          <div style={{
+              padding: 10,
+              background: '#ecfdf5',
+              border: '1px solid #6ee7b7',
+              borderRadius: 6,
+              fontSize: 12,
+              color: '#065f46',
+              marginBottom: 12,
+          }}>
+            ✅ Table configured: {tableData.rows.length} rows × {tableData.columnHeaders?.length || 0} columns
+          </div>
+        ) : (
+          <div style={{
+            padding: 10,
+            background: '#fef3c7',
+            border: '1px solid #fcd34d',
+            borderRadius: 6,
+            fontSize: 12,
+            color: '#92400e',
+            marginBottom: 12,
+          }}>
+            No lookup table configured. Click "Update Data" to add data.
+          </div>
+        )}
+      </div>
+
+      {/* section 3: Full-screen modal for table editor */}
+{showTableEditor && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(0, 0, 0, 0.7)',
+          zIndex: 9999,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 20,
+        }}
+        onClick={() => setShowTableEditor(false)}
+        >
+          <div style={{
+            background: '#fff',
+            borderRadius: 12,
+            width: '95%',
+            height: '90vh',
+            maxWidth: '1400px',
+            display: 'flex',
+            flexDirection: 'column',
+            overflow: 'hidden',
+            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)'
+          }}
+          onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{
+              padding: '20px 24px',
+              borderBottom: '1px solid #e5e7eb',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: '#f9fafb'
+            }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, color: '#111827' }}>
+                  📊 Data Lookup Table Editor
+                </h2>
+                <p style={{ margin: '4px 0 0 0', fontSize: 13, color: '#6b7280' }}>
+                  Configure your lookup table for {settings?.input1Name || "Input 1"} × {settings?.input2Name || "Input 2"}
+                </p>
+              </div>
+              <button
+                onClick={() => setShowTableEditor(false)}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  fontSize: 28,
+                  cursor: 'pointer',
+                  color: '#9ca3af',
+                  lineHeight: 1,
+                  padding: '0 8px',
+                  transition: 'color 0.2s'
+                }}
+                onMouseEnter={(e) => e.target.style.color = '#ef4444'}
+                onMouseLeave={(e) => e.target.style.color = '#9ca3af'}
+              >
+                ×
+              </button>
+            </div>
+
+            <div style={{
+              flex: 1,
+              overflowY: 'auto',
+              padding: 24
+            }}>
+              <DataLookupTableEditor
+                tableData={tableData}
+                onChange={onUpdateTableData}
+                settings={settings}
+              />
+            </div>
+
+            <div style={{
+              padding: '16px 24px',
+              borderTop: '1px solid #e5e7eb',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              background: '#f9fafb'
+            }}>
+              <div style={{ fontSize: 13, color: '#6b7280' }}>
+                💡 Changes are saved automatically
+              </div>
+              <button
+                onClick={() => setShowTableEditor(false)}
+                style={{
+                  padding: '10px 20px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: '#10b981',
+                  color: '#fff',
+                  cursor: 'pointer',
+                  fontSize: 14,
+                  fontWeight: 600,
+                  boxShadow: '0 1px 2px 0 rgba(0, 0, 0, 0.05)'
+                }}
+              >
+                ✓ Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <div style={propertyStyles.sectionWhite}>
+        <div style={{ fontWeight: 600, marginBottom: 12, color: "#374151" }}>
+          Input 1 Configuration
+        </div>
+        
+        <label style={propertyStyles.labelSmall}>Input 1 Name</label>
+        <input
+          type="text"
+          value={settings?.input1Name || "Input 1"}
+          onChange={(e) => onUpdateSettings({ ...(settings || {}), input1Name: e.target.value })}
+          style={propertyStyles.input}
+          placeholder="Input 1"
+        />
+
+        <label style={{ ...propertyStyles.checkboxLabel, marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={settings?.input1Formula || false}
+            onChange={(e) => onUpdateSettings({ ...(settings || {}), input1Formula: e.target.checked })}
+          />
+          <span>Is Input 1 based on formula?</span>
+        </label>
+
+        {settings?.input1Formula && (
+          <>
+            <label style={{ marginTop: 8, display: "block", fontSize: 12 }}>
+              Formula for Input 1
+            </label>
+            <input
+              type="text"
+              value={settings?.input1FormulaText || ""}
+              onChange={(e) => onUpdateSettings({ ...(settings || {}), input1FormulaText: e.target.value })}
+              style={propertyStyles.input}
+              placeholder="e.g., [element_1] * 2"
+            />
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+              This input will be hidden and automatically calculated
+            </div>
+          </>
+        )}
+
+        <label style={{ marginTop: 8, display: "block", fontSize: 12 }}>
+          Maximum Decimal
+        </label>
+        <input
+          type="range"
+          min="0"
+          max="10"
+          value={settings?.input1MaxDecimal || 0}
+          onChange={(e) => onUpdateSettings({ ...(settings || {}), input1MaxDecimal: parseInt(e.target.value, 10) })}
+          style={{ width: "100%" }}
+        />
+        <div style={{ fontSize: 12, color: "#6b7280" }}>
+          Current: {settings?.input1MaxDecimal || 0}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+          <div>
+            <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>
+              Min Value
+            </label>
+            <input
+              type="number"
+              value={settings?.input1MinValue || "0"}
+              onChange={(e) => onUpdateSettings({ ...(settings || {}), input1MinValue: e.target.value })}
+              style={propertyStyles.inputSmall}
+              placeholder="0"
+            />
+            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+              Auto-set from first table value (B1)
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>
+              Max Value
+            </label>
+            <input
+              type="number"
+              value={settings?.input1MaxValue || "10000"}
+              onChange={(e) => onUpdateSettings({ ...(settings || {}), input1MaxValue: e.target.value })}
+              style={propertyStyles.inputSmall}
+              placeholder="10000"
+            />
+            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+              Values beyond last column use last column data
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div style={propertyStyles.sectionBlue}>
+        <div style={{ fontWeight: 600, marginBottom: 12, color: "#374151" }}>
+          Input 2 Configuration
+        </div>
+        
+        <label style={propertyStyles.labelSmall}>Input 2 Name</label>
+        <input
+          type="text"
+          value={settings?.input2Name || "Input 2"}
+          onChange={(e) => onUpdateSettings({ ...(settings || {}), input2Name: e.target.value })}
+          style={propertyStyles.input}
+          placeholder="Input 2"
+        />
+
+        <label style={{ ...propertyStyles.checkboxLabel, marginTop: 8 }}>
+          <input
+            type="checkbox"
+            checked={settings?.input2Formula || false}
+            onChange={(e) => onUpdateSettings({ ...(settings || {}), input2Formula: e.target.checked })}
+          />
+          <span>Is Input 2 based on formula?</span>
+        </label>
+
+        {settings?.input2Formula && (
+          <>
+            <label style={{ marginTop: 8, display: "block", fontSize: 12 }}>
+              Formula for Input 2
+            </label>
+            <input
+              type="text"
+              value={settings?.input2FormulaText || ""}
+              onChange={(e) => onUpdateSettings({ ...(settings || {}), input2FormulaText: e.target.value })}
+              style={propertyStyles.input}
+              placeholder="e.g., [element_2] + 5"
+            />
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+              This input will be hidden and automatically calculated
+            </div>
+          </>
+        )}
+
+        <label style={{ marginTop: 8, display: "block", fontSize: 12 }}>
+          Maximum Decimal
+        </label>
+        <input
+          type="range"
+          min="0"
+          max="10"
+          value={settings?.input2MaxDecimal || 0}
+          onChange={(e) => onUpdateSettings({ ...(settings || {}), input2MaxDecimal: parseInt(e.target.value, 10) })}
+          style={{ width: "100%" }}
+        />
+        <div style={{ fontSize: 12, color: "#6b7280" }}>
+          Current: {settings?.input2MaxDecimal || 0}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+          <div>
+            <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>
+              Min Value
+            </label>
+            <input
+              type="number"
+              value={settings?.input2MinValue || "0"}
+              onChange={(e) => onUpdateSettings({ ...(settings || {}), input2MinValue: e.target.value })}
+              style={propertyStyles.inputSmall}
+              placeholder="0"
+            />
+            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+              Auto-set from first table value (A2)
+            </div>
+          </div>
+
+          <div>
+            <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>
+              Max Value
+            </label>
+            <input
+              type="number"
+              value={settings?.input2MaxValue || "10000"}
+              onChange={(e) => onUpdateSettings({ ...(settings || {}), input2MaxValue: e.target.value })}
+              style={propertyStyles.inputSmall}
+              placeholder="10000"
+            />
+            <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>
+              Values beyond last row use last row data
+            </div>
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+//=========data_lookup panel===================
+//wrapper component that passes setttings to ExcelStyleDataLookup
+//this wrapper handles settings extraction, ExcelStyleDataLookup handles ui rendering
+function DataLookupTableEditor({ tableData, onChange, settings = {}}) {
+  return (
+    <ExcelStyleDataLookup
+      input1Name={settings?.input1Name || "Input 1"}  // Pass custom name or default
+
+      input2Name={settings?.input2Name || "Input 2"}  // Pass custom name or default
+
+      tableData={tableData}                            // Pass existing data
+
+      onChange={onChange} 
+    />
+  );
+}
+
+//================ExcelStyleDataLookup==================
+//here rows = input 1 values, columns = input 2 values
+
+function ExcelStyleDataLookup({
+  input1Name = "Input 1",
+  input2Name = "Input 2",
+  tableData,
+  onChange
+}){
+
+  //purose of columnHeaders: store the column header values[input 2 values - horizontal]
+  //
+  const [columnHeaders, setColumnHeaders] = useState(
+    tableData?.columnHeaders || ['100', '1000', '2500', '5000', '10000', '25000', '50000', '75000']
+  );
+
+  //rows purpose store all all row data [ input 1 values + output values for each column]
+    const [rows, setRows] = useState(
+    tableData?.rows || [
+      { id: 1, header: '10', values: ['', '', '', '', '', '', '', ''] },
+      { id: 2, header: '20', values: ['', '', '', '', '', '', '', ''] },
+      { id: 3, header: '30', values: ['', '', '', '', '', '', '', ''] },
+      { id: 4, header: '40', values: ['', '', '', '', '', '', '', ''] },
+      { id: 5, header: '50', values: ['', '', '', '', '', '', '', ''] },
+      { id: 6, header: '60', values: ['', '', '', '', '', '', '', ''] },
+      { id: 7, header: '70', values: ['', '', '', '', '', '', '', ''] },
+      { id: 8, header: '80', values: ['', '', '', '', '', '', '', ''] },
+      { id: 9, header: '90', values: ['', '', '', '', '', '', '', ''] },
+      { id: 10, header: '100', values: ['', '', '', '', '', '', '', ''] },
+      { id: 11, header: '110', values: ['', '', '', '', '', '', '', ''] },
+      { id: 12, header: '120', values: ['', '', '', '', '', '', '', ''] },
+      { id: 13, header: '130', values: ['', '', '', '', '', '', '', ''] },
+      { id: 14, header: '140', values: ['', '', '', '', '', '', '', ''] }
+    ]
+  );
+
+  //notifyChange function : tell the parent component that data has changed
+  //parent needs to know to save the updated data to the database
+  //it calls the onChange prop with the new data structure
+  //newColumnHeaders: updated array of column header strings
+  //newRows: updated array of row objects
+
+   const notifyChange = (newColumnHeaders, newRows) => {
+    if(onChange){
+      onChange({
+        columnHeaders: newColumnHeaders,
+        rows: newRows
+      });
+    }
+  };
+
+  //updateColumnHeader function
+  //purpose: update a single colum header when user types in it
+  //cause user needs to define what input 2 value means
+   const updateColumnHeader = (index, value) => {
+    const newHeaders = [...columnHeaders];  // Spread operator creates shallow copy
+    newHeaders[index] = value;              // Update the specific header
+    setColumnHeaders(newHeaders);           // Update React state (triggers re-render)
+    notifyChange(newHeaders, rows);         // Tell parent about the change
+  };
+
+
+  //updateRowHeader function
+  //to update a single row header(input 1 value)
+  //cause user needs to define what input 1 value means
+  const updateRowHeader = (index, value) => {
+    const newRows = [...rows];       // Copy all rows
+    newRows[index].header = value;   // Update the header of specific row
+    setRows(newRows);                // Update state
+    notifyChange(columnHeaders, newRows);  // Notify parent
+  };
+
+  //updateCell function
+  //used to update a single data cell(output value) when user types
+  //user needs to enter the lookup result(prices, quantities)
+  const updateCell = (rowIndex, colIndex, value) => {
+    const newRows = [...rows];                      // Copy all rows
+    newRows[rowIndex].values[colIndex] = value;     // Navigate: row -> values array -> specific index
+    setRows(newRows);                               // Update state
+    notifyChange(columnHeaders, newRows);           // Notify parent
+  };
+
+  //addColumn function
+  //add a new colum to the right side of the table
+  //user might need more input 2 values that defaault 8
+   const addColumn = () => {
+    const newHeaders = [...columnHeaders, ''];  // Add empty column header
+    const newRows = rows.map(row => ({          // Transform each row
+      ...row,                                   // Keep all existing properties
+      values: [...row.values, '']               // Add empty value at end
+    }));
+    setColumnHeaders(newHeaders);               // Update both states
+    setRows(newRows);
+    notifyChange(newHeaders, newRows);          // Notify parent of both changes
+  };
+
+  //addRow function
+  //add a new row to the bottom of the table
+  //user might need more input 1 value than default 14
+    const addRow = () => {
+    const newRow = {
+      id: Date.now(),                                // Unique ID using timestamp
+      header: '',                                    // Empty Input 1 value (user will fill)
+      values: new Array(columnHeaders.length).fill('') // Create array of empty strings
+      // If 8 columns exist, creates ['', '', '', '', '', '', '', '']
+    };
+    const newRows = [...rows, newRow];  // Append to end
+    setRows(newRows);                   // Update state
+    notifyChange(columnHeaders, newRows);  // Notify parent
+  };
+
+  //deleteColumn function
+  //remove a column from the table
+  const deleteColumn = (index) => {
+    if (columnHeaders.length <= 1) {     // Guard clause
+      alert('Must have at least 1 column');
+      return;  // Exit function early
+    }
+    // Filter creates new array excluding items where condition is false
+    const newHeaders = columnHeaders.filter((_, i) => i !== index);
+    const newRows = rows.map(row => ({
+      ...row,
+      values: row.values.filter((_, i) => i !== index)  // Remove value at same index
+    }));
+    setColumnHeaders(newHeaders);
+    setRows(newRows);
+    notifyChange(newHeaders, newRows);
+  };
+
+  //deleteRow function
+  //remove a row from the table
+  const deleteRow = (index) => {
+    if (rows.length <= 1) {              // Guard clause
+      alert('Must have at least 1 row');
+      return;
+    }
+    const newRows = rows.filter((_, i) => i !== index);  // Remove row at index
+    setRows(newRows);
+    notifyChange(columnHeaders, newRows);
+  };
+
+  return (
+    <div style={{
+      background: "#fff",
+      padding: 12,
+      borderRadius: 8,
+      border: "1px solid #e5e7eb"
+    }}>
+      {/*section 1: action button for adding rows and columns*/}
+      <div style={{ marginBottom: 16, display: 'flex', gap: 8}}>
+        <button onClick={addRow}
+          style={{
+            padding: '8px 16px', //vertical 6px, horizontal 12px
+            background: '#3b82f6',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 500
+        }}>
+          ➕ Add Row
+        </button>
+        <button onClick={addColumn}
+          style={{
+            padding: '8px 16px', //vertical 6px, horizontal 12px
+            background: '#10b981',
+            color: '#fff',
+            border: 'none',
+            borderRadius: 6,
+            cursor: 'pointer',
+            fontSize: 14,
+            fontWeight: 500
+        }}>
+          ➕ Add Column
+        </button>
+      </div>
+
+      {/*section 2: excel style table, display the main data grid
+      horizontal scroll container*/}
+      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 'auto' }}>
+        <table style={{
+          width: 'auto', 
+          borderCollapse: 'collapse',
+          border: '1px solid #9ca3af',
+          fontSize: 14
+        }}>
+          <thead>
+            <tr>
+              <th style={{
+                background: '#d1d5db',
+                border: '1px solid #9ca3af',
+                padding: '4px', 
+                minWidth: 60,   
+                width: 60       
+              }}>
+              </th>
+              <th colSpan={columnHeaders.length + 1}
+              style={{
+                background: '#f97316',
+                border: '1px solid #9ca3af',
+                padding: '6px', 
+                textAlign: 'center',
+                fontSize: 11,   
+                fontWeight: 700,
+                color: '#fff'
+              }}
+              >
+                {input2Name}
+              </th>
+            </tr>
+            
+            <tr>
+              <th style={{
+                background: '#60a5fa',
+                border: '1px solid #9ca3af',
+                padding: '4px 2px', 
+                textAlign: 'center',
+                fontSize: 10,       
+                fontWeight: 700,
+                color: '#fff',
+                writingMode: 'vertical-rl',
+                textOrientation: 'mixed',
+                minWidth: 60,      
+                width: 60,         
+                height: 100        
+              }}>
+                {input1Name}
+              </th>
+              
+              {columnHeaders.map((header, index) => (
+                <th key={index} style={{
+                  background: '#60a5fa',
+                  border: '1px solid #9ca3af',
+                  padding: 0,
+                  minWidth: 50,    
+                  width: 50,       
+                  position: 'relative'
+                }}>
+                  <input
+                    type="text"
+                    value={header}
+                    onChange={(e) => updateColumnHeader(index, e.target.value)}
+                    style={{
+                      width: '100%',
+                      border: 'none',
+                      padding: '4px 2px',  
+                      background: 'transparent',
+                      fontSize: 10,     
+                      fontWeight: 600,
+                      color: '#fff',
+                      textAlign: 'center',
+                      outline: 'none',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                  <button
+                    onClick={() => deleteColumn(index)}
+                    style={{
+                      position: 'absolute',
+                      top: 1,         
+                      right: 1,       
+                      width: 12,       
+                      height: 12,      
+                      padding: 0,
+                      border: 'none',
+                      background: '#ef4444',
+                      color: '#fff',
+                      borderRadius: 2,
+                      cursor: 'pointer',
+                      fontSize: 8,     
+                      lineHeight: 1,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center'
+                    }}
+                    title="Delete column"
+                  >
+                    ×
+                  </button>
+                </th>
+              ))}
+
+              <th style={{
+                background: '#d1d5db',
+                border: '1px solid #9ca3af',
+                padding: 4,    
+                width: 24       
+              }}>
+              </th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {rows.map((row, rowIndex) => (
+              <tr key={row.id}>
+                <td style={{
+                  background: '#60a5fa',
+                  border: '1px solid #9ca3af',
+                  padding: 0
+                }}>
+                  <input
+                    type="text"
+                    value={row.header}
+                    onChange={(e) => updateRowHeader(rowIndex, e.target.value)}
+                    style={{
+                      width: '100%',
+                      border: 'none',
+                      padding: '3px 4px',  
+                      background: 'transparent',
+                      fontSize: 10,     
+                      fontWeight: 600,
+                      color: '#fff',
+                      textAlign: 'center',
+                      outline: 'none',
+                      boxSizing: 'border-box'
+                    }}
+                  />
+                </td>
+
+                {row.values.map((value, colIndex) => (
+                  <td key={colIndex} style={{
+                    background: '#fff',
+                    border: '1px solid #d1d5db',
+                    padding: 0
+                  }}>
+                    <input
+                      type="text"
+                      value={value}
+                      onChange={(e) => updateCell(rowIndex, colIndex, e.target.value)}
+                      style={{
+                        width: '100%',
+                        border: 'none',
+                        padding: '3px 4px',  
+                        background: 'transparent',
+                        fontSize: 10,     
+                        textAlign: 'center',
+                        outline: 'none',
+                        boxSizing: 'border-box'
+                      }}
+                    />
+                  </td>
+                ))}
+
+                <td style={{
+                    background: '#f9fafb',
+                    border: '1px solid #d1d5db',
+                    padding: 2,      
+                    textAlign: 'center'
+                  }}>
+                    <button
+                      onClick={() => deleteRow(rowIndex)}
+                      style={{
+                        width: 20,      
+                        height: 20,     
+                        padding: 0,
+                        border: 'none',
+                        background: '#fee2e2',
+                        color: '#dc2626',
+                        borderRadius: 3,
+                        cursor: 'pointer',
+                        fontSize: 12,      
+                        lineHeight: 1,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        margin: '0 auto'
+                      }}
+                      title="Delete row"
+                    >
+                      🗑️
+                    </button>
+                  </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/*Smaller info box */}
+      <div style={{ 
+        marginTop: 10,         
+        padding: 8,            
+        background: '#eff6ff',
+        borderRadius: 4,      
+        fontSize: 11,          
+        color: '#1e40af'
+      }}>
+        <strong>💡 How it works:</strong> Orange header shows "{input2Name}" values (columns), Blue vertical text shows "{input1Name}" values (rows), White cells contain lookup results.
+      </div>
+    </div>
+  )
+}
+
+
+
 
 //=============typography panel=========
 function TypographyControls({
@@ -1977,11 +3415,6 @@ function PropertiesPanel({
 
   const deleteValueRange = (id) => {
     onUpdateValueRanges(valueRanges.filter((r) => r.id !== id));
-  };
-
-  // excel file upload handler for data lookup
-  const handleExcelUploadLocal = (e) => {
-    handleExcelUpload(e, onUpdateTableData);
   };
 
   // get available image selector elements for conditional display
@@ -2572,88 +4005,17 @@ function PropertiesPanel({
       {/* data lookup */}
       {type === "data_lookup" && (
         <>
-          <div style={propertyStyles.sectionBlue}>
-            <label style={propertyStyles.label}>Upload Data Table</label>
-            <label style={{ ...propertyStyles.uploadBtn, cursor: "pointer", textAlign: "center" }}>
-              Upload Excel File
-              <input type="file" accept=".xlsx, .xls, .csv" onChange={handleExcelUploadLocal} style={{ display: "none" }} />
-            </label>
-          </div>
-
-          <div style={propertyStyles.sectionWhite}>
-            <div style={{ fontWeight: 600, marginBottom: 12, color: "#374151" }}>Input 1 configuration</div>
-
-            <label style={propertyStyles.labelSmall}>Input 1 name</label>
-            <input type="text" value={settings?.input1Name || "Input 1"} onChange={(e) => onUpdateSettings({ ...(settings || {}), input1Name: e.target.value })} style={propertyStyles.input} placeholder="Input 1" />
-
-            <label style={{ ...propertyStyles.checkboxLabel, marginTop: 8 }}>
-              <input type="checkbox" checked={settings?.input1Formula || false} onChange={(e) => onUpdateSettings({ ...(settings || {}), input1Formula: e.target.checked })} />
-              <span>Is Input 1 based on formula?</span>
-            </label>
-
-            {settings?.input1Formula && (
-              <>
-                <label style={{ marginTop: 8, display: "block", fontSize: 12 }}>Formula for input 1</label>
-                <input type="text" value={settings?.input1FormulaText || ""} onChange={(e) => onUpdateSettings({ ...(settings || {}), input1FormulaText: e.target.value })} style={propertyStyles.input} placeholder="e.g., [element_1] * 2" />
-              </>
-            )}
-
-            <label style={{ marginTop: 8, display: "block", fontSize: 12 }}>Maximum Decimal</label>
-            <input type="range" min="0" max="10" value={settings?.input1MaxDecimal || 0} onChange={(e) => onUpdateSettings({ ...(settings || {}), input1MaxDecimal: parseInt(e.target.value, 10) })} style={{ width: "100%" }} />
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Current: {settings?.input1MaxDecimal || 0}</div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-              <div>
-                <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>Min Value</label>
-                <input type="number" value={settings?.input1MinValue || "0"} onChange={(e) => onUpdateSettings({ ...(settings || {}), input1MinValue: e.target.value })} style={propertyStyles.inputSmall} placeholder="0" />
-                <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>*Based on table values</div>
-              </div>
-              <div>
-                <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>Max Value</label>
-                <input type="number" value={settings?.input1MaxValue || "10000"} onChange={(e) => onUpdateSettings({ ...(settings || {}), input1MaxValue: e.target.value })} style={propertyStyles.inputSmall} placeholder="10000" />
-              </div>
-            </div>
-          </div>
-
-          <div style={propertyStyles.sectionBlue}>
-            <div style={{ fontWeight: 600, marginBottom: 12, color: "#374151" }}>Input 2 Configuration</div>
-
-            <label style={propertyStyles.labelSmall}>Input 2 Name</label>
-            <input type="text" value={settings?.input2Name || "Input 2"} onChange={(e) => onUpdateSettings({ ...(settings || {}), input2Name: e.target.value })} style={propertyStyles.input} placeholder="Input 2" />
-
-            <label style={{ ...propertyStyles.checkboxLabel, marginTop: 8 }}>
-              <input type="checkbox" checked={settings?.input2Formula || false} onChange={(e) => onUpdateSettings({ ...(settings || {}), input2Formula: e.target.checked })} />
-              <span>Is Input 2 based on formula?</span>
-            </label>
-
-            {settings?.input2Formula && (
-              <>
-                <label style={{ marginTop: 8, display: "block", fontSize: 12 }}>Formula for Input 2</label>
-                <input type="text" value={settings?.input2FormulaText || ""} onChange={(e) => onUpdateSettings({ ...(settings || {}), input2FormulaText: e.target.value })} style={propertyStyles.input} placeholder="e.g., [element_2] + 5" />
-              </>
-            )}
-
-            <label style={{ marginTop: 8, display: "block", fontSize: 12 }}>Maximum Decimal</label>
-            <input type="range" min="0" max="10" value={settings?.input2MaxDecimal || 0} onChange={(e) => onUpdateSettings({ ...(settings || {}), input2MaxDecimal: parseInt(e.target.value, 10) })} style={{ width: "100%" }} />
-            <div style={{ fontSize: 12, color: "#6b7280" }}>Current: {settings?.input2MaxDecimal || 0}</div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
-              <div>
-                <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>Min Value</label>
-                <input type="number" value={settings?.input2MinValue || "0"} onChange={(e) => onUpdateSettings({ ...(settings || {}), input2MinValue: e.target.value })} style={propertyStyles.inputSmall} placeholder="0" />
-                <div style={{ fontSize: 10, color: "#6b7280", marginTop: 2 }}>*Based on table values</div>
-              </div>
-              <div>
-                <label style={{ fontSize: 11, display: "block", marginBottom: 4 }}>Max Value</label>
-                <input type="number" value={settings?.input2MaxValue || "10000"} onChange={(e) => onUpdateSettings({ ...(settings || {}), input2MaxValue: e.target.value })} style={propertyStyles.inputSmall} placeholder="10000" />
-              </div>
-            </div>
-          </div>
+          <DataLookupPropertiesPanel
+            tableData={tableData}
+            settings={settings}
+            onUpdateTableData={onUpdateTableData}
+            onUpdateSettings={onUpdateSettings}
+          />
           {renderConditionalDisplaySection()}
           {renderTooltipSection()}
           {renderAdditionalInfoSection()}
         </>
-      )}
+)}
 
       {type === "heading" && (
         <>
@@ -2704,7 +4066,13 @@ function RenderComponent({ component = {}, preview = false }) {
     content = {}, 
     buttonStyle = {}, 
     valueRanges = [], 
-    tableData = null } = component;
+    tableData = null 
+  } = component;
+
+  const [uploadedFile, setUploadedFile] = useState(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [photoUrl, setPhotoUrl] = useState(null);
+  const [editedPhoto, setEditedPhoto] = useState(null);
 
   const renderTooltip = () => {
     if (tooltip?.enabled && tooltip?.text) {
@@ -2728,7 +4096,7 @@ function RenderComponent({ component = {}, preview = false }) {
   });
 
   //helper for input/select field styles
-   const getFieldStyles = () => ({
+    const getFieldStyles = () => ({
     width: "100%",
     height: compStyles?.height || "40px",
     background: compStyles?.bgColor || "#fff",
@@ -2747,9 +4115,7 @@ function RenderComponent({ component = {}, preview = false }) {
     <label style={getLabelStyles()}>
       {text}
       {showRequired && required && 
-        <span style={{ color: "#dc2626", marginLeft: 6 }}>
-          *
-        </span>}
+        <span style={{ color: "#dc2626", marginLeft: 6 }}>*</span>}
       {renderTooltip()}
     </label>
   );
@@ -3072,60 +4438,98 @@ function RenderComponent({ component = {}, preview = false }) {
       </div>
     );
 
-   case "file_upload":
-    return (
+    case "file_upload":
+      return (
+        <div style={{
+          width: compStyles?.width || "100%",
+          marginBottom: compStyles?.marginBottom || "16px",
+        }}>
+          {renderLabel(label, settings?.required)}
+          <FileUploadComponent
+            onFileSelect={(data) => setUploadedFile(data)}
+            acceptedFormats={['.jpg', '.jpeg', '.png', '.pdf']}
+            maxSize={10}
+          />
+          {uploadedFile && uploadedFile.type.startsWith('image/') && (
+            <img
+              src={uploadedFile.dataUrl} 
+              alt="Preview" 
+              style={{ 
+                width: '100%', 
+                maxHeight: 200, 
+                objectFit: 'contain', 
+                marginTop: 12, 
+                borderRadius: 6 
+              }} 
+            />
+          )}
+        </div>
+      );
+
+  case "photo_editor":
+
+    return(
       <div style={{
         width: compStyles?.width || "100%",
         marginBottom: compStyles?.marginBottom || "16px",
       }}>
         {renderLabel(label, settings?.required)}
-        <div style={{
-          width: "100%", 
-          minHeight: compStyles?.height || "80px",
-          background: compStyles?.bgColor || "#fff",
-          border: `${compStyles?.borderWidth || "1px"} solid ${compStyles?.borderColor || "#e5e7eb"}`,
-          borderRadius: compStyles?.borderRadius || "6px",
-          display: "flex", 
-          flexDirection: "column", 
-          alignItems: "center", 
-          justifyContent: "center", 
-          gap: 8,
-          padding: 12
-        }}>
-          <div style={{ fontSize: 32 }}>📤</div>
-          <div style={{ fontSize: 14, color: "#6b7280", textAlign: "center" }}>
-            <strong>Click to upload</strong> or drag and drop
-            <br />
-            <span style={{ fontSize: 12 }}>PNG, JPG, PDF up to 10MB</span>
-          </div>
-        </div>
-      </div>
-    );
 
-  case "photo_editor":
-    return (
-      <div style={{
-        width: compStyles?.width || "100%",
-        marginBottom: compStyles?.marginBottom || "16px",
-      }}>
-        {renderLabel(label)}
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <button
-            disabled={!preview}
-            style={{
-              padding: "8px 12px", 
-              background: buttonStyle?.bgColor || "#000", 
-              color: buttonStyle?.textColor || "#fff", 
+        <FileUploadComponent
+          onFileSelect={(data) => {
+            if(data && data.type.startsWith('image/')){
+              setPhotoUrl(data.dataUrl);
+              setEditorOpen(true);
+            } else if (data){
+              alert('Please upload an image file (JPG, PNG)');
+            }
+          }}
+          acceptedFormats={['.jpg', '.jpeg', '.png']}
+          maxSize={10}
+        />
+
+        {editedPhoto && (
+          <div style={{ marginTop: 12}}>
+            <img
+             src={editedPhoto}
+             alt="Edited"
+             style={{
+              width: '100%', 
+              borderRadius: 6, 
+              border: '2px solid #10b981' 
+             }}
+            />
+            <button
+             onClick={() => {
+              setPhotoUrl(editedPhoto);
+              setEditorOpen(true);
+             }}
+             style={{
+              marginTop: 8,
+              width: '100%',
+              padding: '8px 16px',
               borderRadius: 6,
-              border: "none",
-              cursor: preview ? "pointer" : "not-allowed",
-              opacity: preview ? 1 : 0.7
-            }}
-          >
-            {buttonStyle?.buttonText || "Edit"}
-          </button>
-          <div style={{ fontSize: 12, color: "#6b7280" }}>Upload & edit photo</div>
-        </div>
+              border: 'none',
+              background: buttonStyle?.bgColor || '#3b82f6',
+              color: buttonStyle?.textColor || '#fff',
+              cursor: 'pointer',
+              fontWeight: 500,
+             }}
+            >
+              {buttonStyle?.buttonText || '✏️ Edit Again'}
+            </button>
+          </div>
+        )}
+
+        <PhotoEditorModal
+        isOpen={editorOpen}
+        onClose={() => setEditorOpen(false)}
+        onSave={(editedData) => {
+          setEditedPhoto(editedData);
+          setEditorOpen(false);
+        }}
+        initialImage={photoUrl}
+        />
       </div>
     );
 
@@ -3170,20 +4574,19 @@ function RenderComponent({ component = {}, preview = false }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           <div>
             <label style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 500 }}>
-              {settings?.input1Name || "Input 1"}
-            </label>
-            <input
-              type="number" 
-              disabled={!preview} 
-              placeholder="Enter value" 
-              style={{
-                ...getFieldStyles(),
-                height: "36px",
-                cursor: preview ? "text" : "not-allowed",
-              }}
-            />
+            {settings?.input1Name || "Input 1"}
+          </label>
+          <input
+            type="number" 
+            disabled={!preview} 
+            placeholder="Enter value" 
+            style={{
+              ...getFieldStyles(),
+              height: "36px",
+              cursor: preview ? "text" : "not-allowed",
+            }}
+          />
           </div>
-          <div>
             <label style={{ display: "block", marginBottom: 6, fontSize: 13, fontWeight: 500 }}>
               {settings?.input2Name || "Input 2"}
             </label>
@@ -3197,20 +4600,32 @@ function RenderComponent({ component = {}, preview = false }) {
                 cursor: preview ? "text" : "not-allowed",
               }}
             />
-          </div>
-          {tableData && !preview && (
+          <div>
+          {tableData && tableData.rows && tableData.rows.length > 0 && !preview && (
             <div style={{
-              padding: 8, 
+              padding: 10, 
               background: "#ecfdf5", 
               border: "1px solid #6ee7b7", 
-              borderRadius: 4, 
+              borderRadius: 6, 
               fontSize: 12, 
               color: "#065f46" 
-          }}>
-              ✓ Table data loaded: {tableData.fileName} ({tableData.data?.length || 0} rows)
+            }}>
+              ✅ Table configured: {tableData.rows.length} rows × {tableData.columnHeaders?.length || 0} columns
             </div>
           )}
-
+          {(!tableData || !tableData.rows || tableData.rows.length === 0) && !preview && (
+            <div style={{
+              padding: 10, 
+              background: "#fef3c7", 
+              border: "1px solid #fcd34d", 
+              borderRadius: 6, 
+              fontSize: 12, 
+              color: "#92400e" 
+            }}>
+              ⚠️ No lookup table configured. Add data in properties panel.
+            </div>
+          )}
+          </div>
         </div>
 
       </div>
@@ -3453,6 +4868,24 @@ const styles = {
     color: "#854d0e",
   },
 
+  dragHandle: {
+    position: "absolute",
+    left: 8,
+    top: "50%",
+    transform: "translateY(-50%)",
+    width: 28,
+    height: 28,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 6,
+    background: "#f3f4f6",
+    cursor: "grab",
+    zIndex: 12,
+    fontSize: 14,
+    userSelect: "none",
+  },
+
   sidebar: {
     width: 360,
     borderLeft: "1px solid #e5e7eb",
@@ -3610,14 +5043,343 @@ const propertyStyles = {
   },
 };
 
+//============================================================
+const photoEditorStyles = {
+  overlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    background: 'rgba(0,0,0,0.7)',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1000,
+    padding: 20,
+  },
+  modal: {
+    background: '#fff',
+    borderRadius: 12,
+    width: '95%',
+    maxWidth: 1100,
+    maxHeight: '95vh',
+    overflow: 'auto',
+  },
+  header: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderBottom: '1px solid #e5e7eb',
+  },
+  modalTitle: {
+    fontSize: 24,
+    fontWeight: 700,
+    margin: 0,
+  },
+  closeBtn: {
+    background: 'transparent',
+    border: 'none',
+    fontSize: 28,
+    cursor: 'pointer',
+    color: '#6b7280',
+  },
+  body: {
+    padding: 20,
+  },
+  canvasWrap: {
+    background: '#f3f4f6',
+    borderRadius: 8,
+    padding: 20,
+    marginBottom: 20,
+    display: 'flex',
+    justifyContent: 'center',
+  },
+  canvas: {
+    maxWidth: '100%',
+    border: '2px solid #e5e7eb',
+    borderRadius: 4,
+    background: '#fff',
+  },
+  toolbar: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: 12,
+  },
+  toolRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    padding: 12,
+    background: '#f9fafb',
+    borderRadius: 6,
+    flexWrap: 'wrap',
+  },
+  label: {
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#374151',
+    minWidth: 100,
+  },
+  btn: {
+    padding: '8px 16px',
+    borderRadius: 6,
+    border: '1px solid #d1d5db',
+    background: '#fff',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 500,
+  },
+  btnActive: {
+    background: '#3b82f6',
+    color: '#fff',
+    borderColor: '#3b82f6',
+  },
+  slider: {
+    flex: 1,
+    maxWidth: 200,
+  },
+  value: {
+    fontSize: 13,
+    fontWeight: 500,
+    minWidth: 50,
+  },
+  input: {
+    flex: 1,
+    padding: '8px 12px',
+    border: '1px solid #d1d5db',
+    borderRadius: 6,
+    fontSize: 13,
+  },
+  color: {
+    width: 50,
+    height: 36,
+    border: '1px solid #d1d5db',
+    borderRadius: 6,
+    cursor: 'pointer',
+  },
+  footer: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    padding: 20,
+    borderTop: '1px solid #e5e7eb',
+  },
+  resetBtn: {
+    padding: '10px 20px',
+    borderRadius: 6,
+    border: '1px solid #f59e0b',
+    background: '#fff',
+    color: '#f59e0b',
+    cursor: 'pointer',
+  },
+  cancelBtn: {
+    padding: '10px 20px',
+    borderRadius: 6,
+    border: '1px solid #e5e7eb',
+    background: '#fff',
+    cursor: 'pointer',
+  },
+  saveBtn: {
+    padding: '10px 20px',
+    borderRadius: 6,
+    border: 'none',
+    background: '#059669',
+    color: '#fff',
+    cursor: 'pointer',
+    fontWeight: 500,
+  },
+};
 
-{/*
-1. compStyles - The component's styles object
-2. onUpdateStyle - Function to update styles
-3. showAlignment (boolean) - Show/hide text alignment controls
-4. showColors (boolean) - Show/hide color controls
-5. showSpacing (boolean) - Show/hide spacing controls
-6. fontSizeRange (object) - { min: number, max: number }
-7. labelPrefix (string) - Text to prefix before "Typography" (e.g., "Body ", "Heading ")  
-  
-*/}
+const dataLookupStyles = {
+  container: {
+    background: '#fff',
+    borderRadius: 8,
+    padding: 16,
+    border: '1px solid #e5e7eb',
+    marginTop: 12,
+  },
+  toolbar: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    marginBottom: 12,
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  toolbarLeft: {
+    display: 'flex',
+    gap: 8,
+  },
+  toolbarRight: {
+    display: 'flex',
+    gap: 8,
+  },
+  addBtn: {
+    padding: '6px 12px',
+    borderRadius: 6,
+    border: 'none',
+    background: '#10b981',
+    color: '#fff',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 500,
+  },
+  editHeaderBtn: {
+    padding: '6px 12px',
+    borderRadius: 6,
+    border: '1px solid #3b82f6',
+    background: '#fff',
+    color: '#3b82f6',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 500,
+  },
+  templateBtn: {
+    padding: '6px 12px',
+    borderRadius: 6,
+    border: '1px solid #8b5cf6',
+    background: '#fff',
+    color: '#8b5cf6',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 500,
+  },
+  importBtn: {
+    padding: '6px 12px',
+    borderRadius: 6,
+    border: '1px solid #3b82f6',
+    background: '#fff',
+    color: '#3b82f6',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 500,
+    display: 'inline-block',
+  },
+  exportBtn: {
+    padding: '6px 12px',
+    borderRadius: 6,
+    border: '1px solid #f59e0b',
+    background: '#fff',
+    color: '#f59e0b',
+    cursor: 'pointer',
+    fontSize: 13,
+    fontWeight: 500,
+  },
+  infoBox: {
+    padding: 12,
+    background: '#eff6ff',
+    border: '1px solid #bfdbfe',
+    borderRadius: 6,
+    marginBottom: 12,
+    fontSize: 12,
+    color: '#1e40af',
+  },
+  tableWrapper: {
+    overflowX: 'auto',
+    marginBottom: 12,
+  },
+  table: {
+    width: '100%',
+    borderCollapse: 'collapse',
+    fontSize: 13,
+  },
+  th: {
+    background: '#f3f4f6',
+    padding: 10,
+    textAlign: 'left',
+    borderBottom: '2px solid #e5e7eb',
+    fontWeight: 600,
+    color: '#374151',
+    fontSize: 12,
+  },
+  thActions: {
+    background: '#f3f4f6',
+    padding: 10,
+    textAlign: 'center',
+    borderBottom: '2px solid #e5e7eb',
+    fontWeight: 600,
+    width: 80,
+  },
+  headerContent: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+    justifyContent: 'space-between',
+  },
+  headerBadge: {
+    padding: '2px 6px',
+    borderRadius: 4,
+    background: '#dbeafe',
+    color: '#1e40af',
+    fontSize: 10,
+    fontWeight: 600,
+  },
+  headerBadgeOutput: {
+    padding: '2px 6px',
+    borderRadius: 4,
+    background: '#dcfce7',
+    color: '#166534',
+    fontSize: 10,
+    fontWeight: 600,
+  },
+  headerInput: {
+    width: '100%',
+    padding: '4px 6px',
+    border: '1px solid #3b82f6',
+    borderRadius: 4,
+    fontSize: 12,
+    fontWeight: 600,
+  },
+  evenRow: {
+    background: '#fff',
+  },
+  oddRow: {
+    background: '#f9fafb',
+  },
+  td: {
+    padding: 8,
+    borderBottom: '1px solid #e5e7eb',
+  },
+  tdActions: {
+    padding: 8,
+    borderBottom: '1px solid #e5e7eb',
+    textAlign: 'center',
+  },
+  cellInput: {
+    width: '100%',
+    padding: '6px 8px',
+    border: '1px solid #e5e7eb',
+    borderRadius: 4,
+    fontSize: 13,
+    boxSizing: 'border-box',
+  },
+  deleteBtn: {
+    background: '#fee2e2',
+    border: 'none',
+    borderRadius: 4,
+    padding: '4px 8px',
+    cursor: 'pointer',
+    fontSize: 14,
+  },
+  emptyState: {
+    padding: 40,
+    textAlign: 'center',
+    color: '#9ca3af',
+  },
+  emptyIcon: {
+    fontSize: 32,
+    marginBottom: 8,
+  },
+  stats: {
+    display: 'flex',
+    gap: 16,
+    padding: 10,
+    background: '#f9fafb',
+    borderRadius: 6,
+  },
+  statItem: {
+    fontSize: 12,
+    color: '#6b7280',
+    fontWeight: 500,
+  },
+};

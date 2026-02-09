@@ -1,11 +1,14 @@
-import React, { useState, useEffect, useMemo } from "react";
-import { useLoaderData, useNavigate, useFetcher } from "react-router";
+import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useLoaderData, useNavigate, useFetcher} from "react-router";
 import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { json } from "../utils/response";
 import { CalculatorEngine } from "../utils/calculator";
 
-// ---------- Loader -----------------------------------------
+
+// ==================== LOADER ====================
+//fetch form data when preview page loads
+//same as edit file loader
 export const loader = async ({ request, params }) => {
   try {
     const { session } = await authenticate.admin(request);
@@ -31,7 +34,8 @@ export const loader = async ({ request, params }) => {
   }
 };
 
-//action function for template
+// ==================== ACTION ====================
+//handle form submissions(save as template)
 export const action = async ({ request, params }) => {
   try {
     const { session } = await authenticate.admin(request);
@@ -53,7 +57,6 @@ export const action = async ({ request, params }) => {
         return json({ success: false, error: "Template name is required" }, { status: 400 });
       }
 
-      // Update the form to mark it as a template
       await prisma.form.update({
         where: { id: formId, shop },
         data: {
@@ -75,9 +78,10 @@ export const action = async ({ request, params }) => {
   } catch (error) {
     return json({ error: error.message }, { status: 500 });
   }
-}
+};
 
-// Safe JSON parse utility
+// ==================== UTILITY ====================
+
 function safeJSONParse(value, fallback) {
   try {
     return JSON.parse(value);
@@ -86,25 +90,29 @@ function safeJSONParse(value, fallback) {
   }
 }
 
-// ==================== Preview Page ====================
-export default function FormBuilderPreview() {
-  const { form } = useLoaderData();
+
+//===============main component==================
+export default function FormBuilderPreview(){
+  const {form } = useLoaderData();
   const navigate = useNavigate();
   const fetcher = useFetcher();
 
-  const templateFetcher = useFetcher();
   const [showTemplateModal, setShowTemplateModal] = useState(false);
-  const [templateName, setTemplateName] = useState("");
-  const [templateDescription, setTemplateDescription] = useState("");
+  //control save as template modal
+
   const [savedAsTemplate, setSavedAsTemplate] = useState(form?.isTemplate || false);
+  //track if already saved as template
 
+  //load components
+  //parse database fields into component objectss
+  //same logic as edit file but stored in state( not useState callback)
 
-  const [components] = useState(() => {
+  const [components] = useState(()=>{
     const fields = form?.fields || [];
     return fields.map((f) => {
       const parsedOptions = f.options ? safeJSONParse(f.options, {}) : {};
       const parsedMetadata = f.metadata ? safeJSONParse(f.metadata, {}) : {};
-
+      
       const baseComponent = {
         id: f.id,
         type: f.type,
@@ -112,7 +120,7 @@ export default function FormBuilderPreview() {
         placeholder: f.placeholder || "",
         required: !!f.required,
         styles: parsedOptions,
-        tooltip: parsedMetadata.tooltip || { enabled: false, text: "" },
+        tooltip: parsedMetadata.tooltip || {enabled: false, text: ""},
         conditionalDisplay: parsedMetadata.conditionalDisplay || {
           enabled: false,
           valueWhenNotDisplayed: "1",
@@ -121,142 +129,107 @@ export default function FormBuilderPreview() {
         additionalInfo: parsedMetadata.additionalInfo || "",
       };
 
-      switch (f.type) {
-        case "dropdown":
-        case "radio":
-          return {
-            ...baseComponent,
-            options: parsedMetadata.options || [
-              { id: 1, name: "Option 1", value: "0" },
-              { id: 2, name: "Option 2", value: "0" },
-            ],
-          };
-
+      //parse element-specific data based on type
+      switch(f.type){
         case "heading":
           return {
             ...baseComponent,
-            content: parsedMetadata.content || { text: "Form Heading" },
+            content: parsedMetadata.content || {text: "Form Heading"},
           };
 
-        case "image_selector":
-          return {
-            ...baseComponent,
-            options: parsedMetadata.options || [
-              { id: 1, name: "Option 1", value: "0", image: null },
-              { id: 2, name: "Option 2", value: "0", image: null },
-            ],
-            settings: parsedMetadata.settings || {
-              enableSwatch: true,
-              showImageOnSelection: false,
-            },
-          };
+          case "dropdown":
+            return {
+              ...baseComponent,
+              options: parsedMetadata.options || [
+                { id: 1, name: "Option 1", value: "0"},
+                { id: 2, name: "Option 2", value: "0"},
+              ],
+            };
 
-        case "data_lookup":
-          return {
-            ...baseComponent,
-            settings: parsedMetadata.settings || {
-              input1Name: "Input 1",
-              input1Formula: false,
-              input1FormulaText: "",
-              input1MaxDecimal: 0,
-              input1MinValue: "0",
-              input1MaxValue: "10000",
-              input2Name: "Input 2",
-              input2Formula: false,
-              input2FormulaText: "",
-              input2MaxDecimal: 0,
-              input2MinValue: "0",
-              input2MaxValue: "10000",
-            },
-            tableData: parsedMetadata.tableData || null,
-          };
+          case "radio":
+            return {
+              ...baseComponent,
+              options: parsedMetadata.options || [
+                {id: 1, name: "Option 1", value: "0"},
+                {id: 2, name: "Option 2", value: "0"},
+              ],
+            };
 
-        case "number_input":
-          return {
-            ...baseComponent,
-            settings: parsedMetadata.settings || {
-              useAsQuantity: false,
-              minValue: "0",
-              maxValue: "10000",
-              maxDecimal: 0,
-              valueRangeEnabled: false,
-            },
-            valueRanges: parsedMetadata.valueRanges || [
-              { id: 1, start: "0", end: "0", value: "0" }
-            ],
-          };
+            case "image_selector":
+              return {
+                ...baseComponent,
+                options: parsedMetadata.options || [],
+                settings: parsedMetadata.settings || {
+                  enableSwatch: true,
+                  showImageOnSelection: false,
+                },
+              };
 
-        case "text_block":
-          return {
-            ...baseComponent,
-            content: parsedMetadata.content || { heading: "", richText: "" },
-          };
+            case "data_lookup":
+              return {
+                ...baseComponent,
+                settings: parsedMetadata.settings || {},
+                tableData: parsedMetadata.tableData || null,
+              };
+            
+              case "number_input":
+                return {
+                  ...baseComponent,
+                  settings: parsedMetadata.settings || {},
+                  valueRanges: parsedMetadata.valueRanges || [],
+                };
 
-        case "text_input":
-          return {
-            ...baseComponent,
-            settings: parsedMetadata.settings || {
-              includeSpaceInLength: false,
-              minCharacters: "0",
-              maxCharacters: "50",
-              placeholder: "",
-              required: false,
-            },
-          };
+            case "text_block":
+              return {
+                ...baseComponent,
+                content: parsedMetadata.content || {heading: "", richText: ""},
+              };
 
-        case "checkbox":
-          return {
-            ...baseComponent,
-            settings: parsedMetadata.settings || {
-              multipleSelection: false,
-              unCheckedValue: "0",
-              checkedValue: "10",
-              required: false,
-            },
-            options: parsedMetadata.options || [
-              { id: 1, name: "Option 1", value: "0" },
-              { id: 2, name: "Option 2", value: "0" },
-            ],
-          };
+            case "text_input":
+              return {
+                ...baseComponent,
+                settings: parsedMetadata.settings || {},
+              };
+            
+            case "checkbox":
+              return {
+                ...baseComponent,
+                settings: parsedMetadata.settings || {},
+                options: parsedMetadata.options || [],
+              };
 
-        case "calculation_display":
-          return {
-            ...baseComponent,
-            settings: parsedMetadata.settings || {
-              useAsQuantity: false,
-              formula: "",
-              minValue: "0",
-              formulaDecimal: 0,
-              formulaPrefix: "",
-              formulaSuffix: "",
-            },
-          };
+            case "calculation_display":
+              return {
+                ...baseComponent,
+                settings: parsedMetadata.settings || {},
+              };
 
-        case "photo_editor":
-          return {
-            ...baseComponent,
-            settings: parsedMetadata.settings || { required: false },
-            buttonStyle: parsedMetadata.buttonStyle || {
-              buttonText: "Edit",
-              bgColor: "#000000",
-              textColor: "#ffffff",
-            },
-          };
+          case "photo_editor":
+            return {
+              ...baseComponent,
+              settings: parsedMetadata.settings || { required: false},
+              buttonStyle: parsedMetadata.buttonStyle || {
+                buttonText: "Edit",
+                bgColor: "#000000",
+                textColor: "#ffffff",
+              },
+            };
 
-        case "file_upload":
-          return {
-            ...baseComponent,
-            settings: parsedMetadata.settings || { required: false },
-          };
+          case "file_upload":
+            return {
+              ...baseComponent,
+              settings: parsedMetadata.settings || {required: false},
+            };
 
-        default:
-          return baseComponent;
+          default:
+            return baseComponent;
       }
     });
   });
 
+  //load formula settings
   const [formulaSettings] = useState(() => {
-    if (form?.formulaSettings) {
+    if(form?.formulaSettings){
       const parsed = safeJSONParse(form.formulaSettings, null);
       return parsed || {
         formula: "",
@@ -267,6 +240,7 @@ export default function FormBuilderPreview() {
         formulaSuffix: "",
       };
     }
+
     return {
       formula: "",
       formulaLabel: "",
@@ -277,72 +251,100 @@ export default function FormBuilderPreview() {
     };
   });
 
-  const [formValues, setFormValues] = useState({});
-  const [calculatedPrice, setCalculatedPrice] = useState(0);
+  //initialize calculator
+  //create calculator instance for real-time calculations
+  //useMemo prevents recreating on every render
 
   const calculator = useMemo(
     () => new CalculatorEngine(components, formulaSettings),
     [components, formulaSettings]
   );
+  //useMemo caches calclator instance
+  //only recreates if components or formulaSettings change
 
-  useEffect(() => {
+  //state management
+  const [formValues, setFormValues] = useState({});
+  //store all use input values
+  //object like {elementId: value, ...}
+
+  const [calculatedPrice, setCalculatedPrice] = useState(0);
+  //store current calculated total price
+  //number updated on every form value change
+
+  //auto-calculate on change
+  //recalculation price whenever user changes any input
+
+  useEffect(()=> {
     const price = calculator.calculateFinalPrice(formValues);
     setCalculatedPrice(price);
   }, [formValues, calculator]);
+  //useEffect runs when formValues or calculator changes
+  //keeps calculatedPrice in sync with input
 
+  ///========handlers===================
   const handleValueChange = (elementId, value) => {
     setFormValues(prev => ({
       ...prev,
       [elementId]: value
     }));
+
+    //update single form value
+    //spread previus values, update changed field
+    //useEffect above to recalculate
   };
 
   const getCalculatedValue = (component) => {
-    if (component.type !== "calculation_display") return 0;
+    if(component.type !== "calculation_display") return 0;
+    //only calculation_display elements show formula
+
     const result = calculator.evaluateFormula(component.settings?.formula || "", formValues);
+    //calculate this element's formula
+
     const decimals = parseInt(component.settings?.formulaDecimal) || 0;
     return parseFloat(result.toFixed(decimals));
+    //round to specified decimals
   };
 
-  const isElementVisible = (component) => {
+  const isElementVisible = (component)=>{
     return calculator.isElementVisible(component, formValues);
+    //check conditional display rules
+    //return true/false based on trigger element
   };
 
-   // Handle save as template
-  const handleSaveAsTemplate = () => {
-  if (!templateName.trim()) {
-    alert("Please enter a template name");
-    return;
-  }
-  
-  const formData = new FormData();
-  formData.append("actionType", "saveAsTemplate");
-  formData.append("templateName", templateName);
-  formData.append("templateDescription", templateDescription);
-  
-  fetcher.submit(formData, { method: "post" });
-};
+  const handleSaveAsTemplate = (templateName, templateDescription) => {
+    const formData = new FormData();
+    formData.append("actionType", "saveAsTemplate");
+    formData.append("templateName", templateName);
+    formData.append("templateDescription", templateDescription);
 
-    // Show success message and close modal
-    useEffect(() => {
-      if (fetcher.data?.success && fetcher.data?.action === "saveAsTemplate") {
-        setSavedAsTemplate(true);
-        setShowTemplateModal(false);
-        // Optional: Show success toast
-        alert("✅ Template saved successfully!");
-      }
-    }, [fetcher.data]);
+    fetcher.submit(formData, {method: "post"});
+    //submit to action function above
+  };
 
-    const isSubmitting = fetcher.state === "submitting";
+  //effect: template save success
+  useEffect(() => {
+    if(fetcher.data?.success && fetcher.data?.action === "saveAsTemplate"){
+      setSavedAsTemplate(true);
+       setShowTemplateModal(false);
+      alert("Template saved successfully!");
+    }
+  }, [fetcher.data]);
+  //show feedback when save completes
+
+  const isSubmitting = fetcher.state === "submitting";
+  //show loading state during submission
 
 
+  //===================render=========================
   return (
     <div style={styles.container}>
       <div style={styles.topBar}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <button 
+          <button
             onClick={() => navigate("/app/form-builder")} 
             style={styles.backButton}
+            onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
+            onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
           >
             ← Back
           </button>
@@ -354,7 +356,7 @@ export default function FormBuilderPreview() {
               onClick={() => navigate("/app/form-templates")}
               style={styles.templateBtn}
             >
-              ⭐ View in Templates
+              📋 View in Templates
             </button>
           ) : (
             <button 
@@ -362,7 +364,7 @@ export default function FormBuilderPreview() {
               style={styles.saveTemplateBtn}
               disabled={isSubmitting}
             >
-              {isSubmitting ? "Saving..." : "💾 Save as Template"}
+              {isSubmitting ? "Saving..." : " Save as Template 📋"}
             </button>
           )}
 
@@ -370,10 +372,12 @@ export default function FormBuilderPreview() {
             onClick={() => navigate(`/app/form-builder-edit/${form.id}`)}
             style={styles.editButton}
           >
-            ✏️ Edit Form
+            ✍🏻 Edit Form
           </button>
         </div>
       </div>
+
+      {/* ==================== TEMPLATE MODAL ==================== */}
 
       <SaveAsTemplateModal
         isOpen={showTemplateModal}
@@ -383,32 +387,41 @@ export default function FormBuilderPreview() {
         isSubmitting={isSubmitting}
       />
 
+      {/*===============preview====================*/}
+
       <div style={styles.previewContainer}>
         <div style={styles.formPreview}>
+          {/* ==================== FORM HEADER ==================== */}
           <div style={styles.formHeader}>
             <h1 style={styles.formTitle}>{form?.name || "Untitled Form"}</h1>
             
             {formulaSettings.formulaLabel && (
               <div style={styles.formulaDisplay}>
-                <span style={{ fontWeight: 600 }}>{formulaSettings.formulaLabel}:</span>
-                <span style={{ marginLeft: 8, fontSize: 24, fontWeight: 700, color: "#059669" }}>
+                <span style={{ fontWeight: 600, fontSize: 16 }}>
+                  {formulaSettings.formulaLabel}:
+                </span>
+                <span style={{ fontSize: 28, fontWeight: 700, color: "#059669" }}>
                   {calculator.formatPrice(calculatedPrice)}
                 </span>
               </div>
             )}
+            {/* Show live calculated price at top */}
           </div>
 
+          {/* ==================== FORM ELEMENTS ==================== */}
           {components.length === 0 ? (
             <div style={styles.emptyState}>
               <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
-              <h3 style={{ color: "#6b7280", margin: "0 0 8px 0" }}>No elements in this form</h3>
-              <p style={{ color: "#9ca3af", margin: 0 }}>Add elements in the editor to see them here</p>
+              <h3>No elements in this form</h3>
+              <p>Add elements in the editor to see them here</p>
             </div>
           ) : (
             <div style={styles.elementsContainer}>
               {components.map((component, index) => {
+                //CONDITIONAL DISPLAY CHECk
                 if (!isElementVisible(component)) {
                   return null;
+                  // Don't render hidden elements
                 }
 
                 return (
@@ -418,6 +431,7 @@ export default function FormBuilderPreview() {
                       value={formValues[component.id]}
                       onChange={(value) => handleValueChange(component.id, value)}
                       calculatedValue={getCalculatedValue(component)}
+                      formValues={formValues}
                     />
                   </div>
                 );
@@ -429,9 +443,20 @@ export default function FormBuilderPreview() {
             <div style={styles.submitSection}>
               <button 
                 style={styles.submitButton}
-                onMouseEnter={(e) => e.currentTarget.style.background = "#047857"}
-                onMouseLeave={(e) => e.currentTarget.style.background = "#059669"}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.background = "#047857";
+                  e.currentTarget.style.transform = "translateY(-2px)";
+                  e.currentTarget.style.boxShadow = "0 6px 12px rgba(5, 150, 105, 0.3)";
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.background = "#059669";
+                  e.currentTarget.style.transform = "translateY(0)";
+                  e.currentTarget.style.boxShadow = "0 4px 6px rgba(5, 150, 105, 0.25)";
+                }}
                 onClick={() => {
+                
+                  console.log("Form Values:", formValues);
+                  console.log("Calculated Price:", calculatedPrice);
                   alert(`Total Price: ${calculator.formatPrice(calculatedPrice)}\n\nForm Data: ${JSON.stringify(formValues, null, 2)}`);
                 }}
               >
@@ -439,81 +464,14 @@ export default function FormBuilderPreview() {
               </button>
             </div>
           )}
-        </div>
-      </div>
-
-      {showTemplateModal && (
-        <div style={styles.modalOverlay} onClick={() => setShowTemplateModal(false)}>
-          <div style={styles.modalContent} onClick={(e) => e.stopPropagation()}>
-            <h2 style={{ margin: "0 0 20px 0", fontSize: 20, fontWeight: 600, color: "#111827" }}>
-              Save as Template
-            </h2>
-
-            <div style={{ marginBottom: 16 }}>
-              <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 500, color: "#374151" }}>
-                Template Name *
-              </label>
-              <input
-                type="text"
-                value={templateName}
-                onChange={(e) => setTemplateName(e.target.value)}
-                placeholder="e.g., T-Shirt Calculator Template"
-                style={styles.modalInput}
-              />
-            </div>
-
-            <div style={{ marginBottom: 24 }}>
-              <label style={{ display: "block", marginBottom: 8, fontSize: 14, fontWeight: 500, color: "#374151" }}>
-                Description (Optional)
-              </label>
-              <textarea
-                value={templateDescription}
-                onChange={(e) => setTemplateDescription(e.target.value)}
-                placeholder="Describe what this template is for..."
-                style={styles.modalTextarea}
-              />
-            </div>
-
-            <div style={{ display: "flex", gap: 12, justifyContent: "flex-end" }}>
-              <button
-                onClick={() => setShowTemplateModal(false)}
-                style={styles.cancelButton}
-                onMouseEnter={(e) => e.currentTarget.style.background = "#f3f4f6"}
-                onMouseLeave={(e) => e.currentTarget.style.background = "#fff"}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSaveAsTemplate}
-                disabled={templateFetcher.state === "submitting"}
-                style={{
-                  ...styles.saveButton,
-                  opacity: templateFetcher.state === "submitting" ? 0.6 : 1,
-                  cursor: templateFetcher.state === "submitting" ? "not-allowed" : "pointer",
-                }}
-                onMouseEnter={(e) => {
-                  if (templateFetcher.state !== "submitting") {
-                    e.currentTarget.style.background = "#0d9488";
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  if (templateFetcher.state !== "submitting") {
-                    e.currentTarget.style.background = "#0ea5a4";
-                  }
-                }}
-              >
-                {templateFetcher.state === "submitting" ? "Saving..." : "Save Template"}
-              </button>
-            </div>
           </div>
-        </div>
-      )}
+      </div>
     </div>
-  );
+  )
 }
 
-// ==================== Render Component ====================
-function RenderComponent({ component = {}, value, onChange, calculatedValue }) {
+// ==================== RENDER COMPONENT ====================
+function RenderComponent({ component = {}, value, onChange, calculatedValue, formValues }) {
   const {
     type,
     label,
@@ -527,20 +485,21 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue }) {
     tableData = null,
   } = component;
 
+  // ==================== HELPERS ====================
   const renderTooltip = () => {
     if (tooltip?.enabled && tooltip?.text) {
       return (
         <span 
           title={tooltip.text} 
           style={{ 
-            marginLeft: 6, 
+            marginLeft: 8, 
             fontWeight: 700, 
             cursor: "help",
             display: "inline-flex",
             alignItems: "center",
             justifyContent: "center",
-            width: 18,
-            height: 18,
+            width: 20,
+            height: 20,
             borderRadius: "50%",
             background: "#e0e7ff",
             color: "#4f46e5",
@@ -591,6 +550,7 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue }) {
     </label>
   );
 
+  // ==================== COMPONENT RENDERERS ====================
   switch (type) {
     case "heading":
       return (
@@ -1138,6 +1098,8 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue }) {
               <input
                 type="number"
                 placeholder="Enter value"
+                value={formValues[`${component.id}_input1`] || ""}
+                onChange={(e) => onChange({ ...formValues, [`${component.id}_input1`]: e.target.value })}
                 onFocus={(e) => {
                   e.currentTarget.style.borderColor = "#3b82f6";
                   e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
@@ -1167,6 +1129,8 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue }) {
               <input
                 type="number"
                 placeholder="Enter value"
+                value={formValues[`${component.id}_input2`] || ""}
+                onChange={(e) => onChange({ ...formValues, [`${component.id}_input2`]: e.target.value })}
                 onFocus={(e) => {
                   e.currentTarget.style.borderColor = "#3b82f6";
                   e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
@@ -1182,7 +1146,7 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue }) {
                 }}
               />
             </div>
-            {tableData && (
+            {tableData && tableData.rows && tableData.rows.length > 0 && (
               <div style={{
                 padding: 10,
                 background: "#ecfdf5",
@@ -1196,9 +1160,9 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue }) {
               }}>
                 <span style={{ fontSize: 16 }}>✓</span>
                 <span>
-                  <strong>Table data loaded:</strong> {tableData.fileName} 
+                  <strong>Table data loaded:</strong> {tableData.fileName || "Custom table"} 
                   <span style={{ marginLeft: 4, color: "#059669" }}>
-                    ({tableData.data?.length || 0} rows)
+                    ({tableData.rows.length} rows)
                   </span>
                 </span>
               </div>
@@ -1276,6 +1240,7 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue }) {
   }
 }
 
+// ==================== SAVE AS TEMPLATE MODAL ====================
 function SaveAsTemplateModal({ 
   isOpen, 
   onClose, 
@@ -1299,7 +1264,14 @@ function SaveAsTemplateModal({
       <div style={modalStyles.modal} onClick={(e) => e.stopPropagation()}>
         <div style={modalStyles.header}>
           <h2 style={modalStyles.title}>⭐ Save as Template</h2>
-          <button onClick={onClose} style={modalStyles.closeBtn}>×</button>
+          <button 
+            onClick={onClose} 
+            style={modalStyles.closeBtn}
+            onMouseEnter={(e) => e.currentTarget.style.color = "#374151"}
+            onMouseLeave={(e) => e.currentTarget.style.color = "#6b7280"}
+          >
+            ×
+          </button>
         </div>
 
         <div style={modalStyles.content}>
@@ -1314,6 +1286,14 @@ function SaveAsTemplateModal({
               placeholder="Enter template name..."
               style={modalStyles.input}
               autoFocus
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = "#3b82f6";
+                e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = "#d1d5db";
+                e.currentTarget.style.boxShadow = "none";
+              }}
             />
             <div style={modalStyles.hint}>
               Choose a descriptive name for your template
@@ -1330,6 +1310,14 @@ function SaveAsTemplateModal({
               placeholder="Describe what this template is for..."
               style={modalStyles.textarea}
               rows={4}
+              onFocus={(e) => {
+                e.currentTarget.style.borderColor = "#3b82f6";
+                e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
+              }}
+              onBlur={(e) => {
+                e.currentTarget.style.borderColor = "#d1d5db";
+                e.currentTarget.style.boxShadow = "none";
+              }}
             />
             <div style={modalStyles.hint}>
               Help others understand when to use this template
@@ -1352,13 +1340,37 @@ function SaveAsTemplateModal({
             onClick={onClose} 
             style={modalStyles.cancelBtn}
             disabled={isSubmitting}
+            onMouseEnter={(e) => {
+              if (!isSubmitting) {
+                e.currentTarget.style.background = "#f3f4f6";
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (!isSubmitting) {
+                e.currentTarget.style.background = "#fff";
+              }
+            }}
           >
             Cancel
           </button>
           <button 
             onClick={handleSave}
-            style={modalStyles.saveBtn}
+            style={{
+              ...modalStyles.saveBtn,
+              opacity: !templateName.trim() || isSubmitting ? 0.5 : 1,
+              cursor: !templateName.trim() || isSubmitting ? "not-allowed" : "pointer",
+            }}
             disabled={!templateName.trim() || isSubmitting}
+            onMouseEnter={(e) => {
+              if (templateName.trim() && !isSubmitting) {
+                e.currentTarget.style.background = "#047857";
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (templateName.trim() && !isSubmitting) {
+                e.currentTarget.style.background = "#059669";
+              }
+            }}
           >
             {isSubmitting ? "Saving..." : "💾 Save Template"}
           </button>
@@ -1368,8 +1380,7 @@ function SaveAsTemplateModal({
   );
 }
 
-
-// ==================== Styles ====================
+// ==================== STYLES ====================
 const styles = {
   container: {
     position: "fixed",
@@ -1419,13 +1430,26 @@ const styles = {
     boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
   },
 
-  templateButton: {
+  saveTemplateBtn: {
     padding: "10px 20px",
     borderRadius: 6,
-    border: "1px solid #d1d5db",
+    border: "none",
     cursor: "pointer",
-    background: "#fff",
-    color: "#374151",
+    background: "#059669",
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: 500,
+    transition: "background 0.2s",
+    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
+  },
+
+  templateBtn: {
+    padding: "10px 20px",
+    borderRadius: 6,
+    border: "1px solid #fde68a",
+    cursor: "pointer",
+    background: "#fffbeb",
+    color: "#92400e",
     fontSize: 14,
     fontWeight: 500,
     transition: "all 0.2s",
@@ -1493,7 +1517,7 @@ const styles = {
   },
 
   elementWrapper: {
-    // Element wrapper - no extra spacing
+    // No extra styling needed
   },
 
   submitSection: {
@@ -1517,80 +1541,7 @@ const styles = {
     transition: "all 0.2s",
     minWidth: 200,
   },
-
-  modalOverlay: {
-    position: "fixed",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    background: "rgba(0, 0, 0, 0.6)",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1000,
-    backdropFilter: "blur(4px)",
-  },
-
-  modalContent: {
-    background: "#fff",
-    borderRadius: 12,
-    padding: 32,
-    width: "90%",
-    maxWidth: 500,
-    boxShadow: "0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)",
-    animation: "fadeIn 0.2s ease-out",
-  },
-
-  modalInput: {
-    width: "100%",
-    padding: "10px 12px",
-    border: "1px solid #e5e7eb",
-    borderRadius: 6,
-    fontSize: 14,
-    boxSizing: "border-box",
-    outline: "none",
-    transition: "border-color 0.2s, box-shadow 0.2s",
-  },
-
-  modalTextarea: {
-    width: "100%",
-    minHeight: 80,
-    padding: "10px 12px",
-    border: "1px solid #e5e7eb",
-    borderRadius: 6,
-    fontSize: 14,
-    boxSizing: "border-box",
-    fontFamily: "inherit",
-    resize: "vertical",
-    outline: "none",
-    transition: "border-color 0.2s, box-shadow 0.2s",
-  },
-
-  cancelButton: {
-    padding: "10px 20px",
-    borderRadius: 6,
-    border: "1px solid #e5e7eb",
-    cursor: "pointer",
-    background: "#fff",
-    color: "#374151",
-    fontSize: 14,
-    fontWeight: 500,
-    transition: "background 0.2s",
-  },
-
-  saveButton: {
-    padding: "10px 20px",
-    borderRadius: 6,
-    border: "none",
-    cursor: "pointer",
-    background: "#0ea5a4",
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: 500,
-    transition: "background 0.2s",
-  },
-}
+};
 
 const modalStyles = {
   overlay: {
@@ -1640,6 +1591,7 @@ const modalStyles = {
     color: "#6b7280",
     padding: "0 8px",
     lineHeight: 1,
+    transition: "color 0.2s",
   },
 
   content: {
@@ -1666,6 +1618,7 @@ const modalStyles = {
     fontSize: 14,
     outline: "none",
     boxSizing: "border-box",
+    transition: "border-color 0.2s, box-shadow 0.2s",
   },
 
   textarea: {
@@ -1678,6 +1631,7 @@ const modalStyles = {
     boxSizing: "border-box",
     fontFamily: "inherit",
     resize: "vertical",
+    transition: "border-color 0.2s, box-shadow 0.2s",
   },
 
   hint: {
@@ -1711,6 +1665,7 @@ const modalStyles = {
     fontSize: 14,
     fontWeight: 500,
     color: "#374151",
+    transition: "background 0.2s",
   },
 
   saveBtn: {
@@ -1722,38 +1677,7 @@ const modalStyles = {
     fontSize: 14,
     fontWeight: 600,
     color: "#fff",
-  },
-
-   saveTemplateBtn: {
-    padding: "8px 16px",
-    borderRadius: 6,
-    border: "none",
-    cursor: "pointer",
-    background: "#059669",
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: 500,
-  },
-  
-  templateBtn: {
-    padding: "8px 16px",
-    borderRadius: 6,
-    border: "1px solid #fcd34d",
-    cursor: "pointer",
-    background: "#fef3c7",
-    color: "#92400e",
-    fontSize: 14,
-    fontWeight: 500,
-  },
-  
-  editBtn: {
-    padding: "8px 16px",
-    borderRadius: 6,
-    border: "1px solid #e5e7eb",
-    cursor: "pointer",
-    background: "#fff",
-    color: "#374151",
-    fontSize: 14,
-    fontWeight: 500,
+    transition: "background 0.2s",
   },
 };
+              
