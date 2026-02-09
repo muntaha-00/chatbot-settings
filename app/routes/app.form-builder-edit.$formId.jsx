@@ -4,7 +4,309 @@ import { authenticate } from "../shopify.server";
 import prisma from "../db.server";
 import { json } from "../utils/response";
 import * as XLSX from "xlsx";
+import { e } from "mathjs";
 
+//formula input component
+//autocomplete input for {label} formula syntax
+const FormulaInput = ({
+  value = "",
+  onChange,
+  components = [],
+  placeholder = "e.g., {Size} + {Color} * 2",
+  style = {},
+  showConversion = true,
+  multiline = false
+}) => {
+  const [showAutocomplete, setShowAutocomplete] = useState(false);
+  const [autocompletePosition, setAutocompletePosition] = useState({ top: 0, left: 0 });
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const [searchTerm, setSearchTerm] = useState("");
+  const inputRef = useRef(null);
+  const autocompleteRef = useRef(null);
+  
+  // Get filtered list of available fields
+  const getAvailableFields = () => {
+    const fields = components
+      .filter(c => c.label && c.label.trim())
+      .map((c, index) => ({
+        label: c.label,
+        type: c.type,
+        index: index + 1,
+        id: c.id
+      }));
+    
+    if (!searchTerm) return fields;
+    
+    const term = searchTerm.toLowerCase();
+    return fields.filter(f => 
+      f.label.toLowerCase().includes(term) ||
+      f.type.toLowerCase().includes(term)
+    );
+  };
+  
+  // Handle input change
+  const handleInputChange = (e) => {
+    const newValue = e.target.value;
+    onChange(newValue);
+    
+    const cursorPos = e.target.selectionStart;
+    const textBeforeCursor = newValue.substring(0, cursorPos);
+    const lastOpenBrace = textBeforeCursor.lastIndexOf('{');
+    const lastCloseBrace = textBeforeCursor.lastIndexOf('}');
+    
+    if (lastOpenBrace > lastCloseBrace) {
+      const search = textBeforeCursor.substring(lastOpenBrace + 1);
+      setSearchTerm(search);
+      setShowAutocomplete(true);
+      setSelectedIndex(0);
+      
+      if (inputRef.current) {
+        const rect = inputRef.current.getBoundingClientRect();
+        const lineHeight = 20;
+        const lines = textBeforeCursor.split('\n').length;
+        
+        setAutocompletePosition({
+          top: rect.top + (lines * lineHeight) + (multiline ? 20 : 30),
+          left: rect.left + 10
+        });
+      }
+    } else {
+      setShowAutocomplete(false);
+    }
+  };
+  
+  // Insert field into formula
+  const insertField = (field, addQty = false) => {
+    const input = inputRef.current;
+    if (!input) return;
+    
+    const cursorPos = input.selectionStart;
+    const textBeforeCursor = value.substring(0, cursorPos);
+    const textAfterCursor = value.substring(cursorPos);
+    const lastOpenBrace = textBeforeCursor.lastIndexOf('{');
+    
+    const fieldText = addQty ? `{${field.label}_qty}` : `{${field.label}}`;
+    
+    const newValue = 
+      textBeforeCursor.substring(0, lastOpenBrace) +
+      fieldText +
+      textAfterCursor;
+    
+    onChange(newValue);
+    setShowAutocomplete(false);
+    
+    setTimeout(() => {
+      const newCursorPos = lastOpenBrace + fieldText.length;
+      input.setSelectionRange(newCursorPos, newCursorPos);
+      input.focus();
+    }, 0);
+  };
+  
+  // Keyboard navigation
+  const handleKeyDown = (e) => {
+    if (!showAutocomplete) return;
+    
+    const fields = getAvailableFields();
+    
+    switch(e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        setSelectedIndex(prev => Math.min(prev + 1, fields.length - 1));
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        setSelectedIndex(prev => Math.max(prev - 1, 0));
+        break;
+      case 'Enter':
+      case 'Tab':
+        if (fields.length > 0 && selectedIndex < fields.length) {
+          e.preventDefault();
+          insertField(fields[selectedIndex]);
+        }
+        break;
+      case 'Escape':
+        e.preventDefault();
+        setShowAutocomplete(false);
+        break;
+    }
+  };
+  
+  // Close on outside click
+  useEffect(() => {
+    const handleClickOutside = (e) => {
+      if (autocompleteRef.current && !autocompleteRef.current.contains(e.target) &&
+          inputRef.current && !inputRef.current.contains(e.target)) {
+        setShowAutocomplete(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+  
+  // Auto-scroll selected item
+  useEffect(() => {
+    if (showAutocomplete && autocompleteRef.current) {
+      const selectedElement = autocompleteRef.current.children[selectedIndex + 1]; // +1 for header
+      if (selectedElement) {
+        selectedElement.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
+    }
+  }, [selectedIndex, showAutocomplete]);
+  
+  // Type icons
+  const getTypeIcon = (type) => {
+    const icons = {
+      'number_input': '🔢',
+      'dropdown': '▾',
+      'radio': '◉',
+      'checkbox': '☑',
+      'text_input': '✏️',
+      'calculation_display': '🧮',
+      'data_lookup': '🔍',
+      'image_selector': '🖼️'
+    };
+    return icons[type] || '📋';
+  };
+  
+  const fields = getAvailableFields();
+  const baseInputStyle = {
+    width: '100%',
+    padding: '8px 12px',
+    fontSize: '13px',
+    fontFamily: 'Monaco, Consolas, monospace',
+    border: '1px solid #e5e7eb',
+    borderRadius: '6px',
+    outline: 'none',
+    ...style
+  };
+  
+  const inputStyle = multiline 
+    ? { ...baseInputStyle, minHeight: '80px', resize: 'vertical' }
+    : baseInputStyle;
+  
+  return (
+    <div style={{ position: 'relative', width: '100%' }}>
+      {multiline ? (
+        <textarea
+          ref={inputRef}
+          value={value}
+          onChange={handleInputChange}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          style={inputStyle}
+        />
+      ) : (
+        <input
+          ref={inputRef}
+          type="text"
+          value={value}
+          onChange={handleInputChange}
+          onKeyDown={handleKeyDown}
+          placeholder={placeholder}
+          style={inputStyle}
+        />
+      )}
+      
+      {showAutocomplete && fields.length > 0 && (
+        <div
+          ref={autocompleteRef}
+          style={{
+            position: 'fixed',
+            top: autocompletePosition.top,
+            left: autocompletePosition.left,
+            background: '#ffffff',
+            border: '1px solid #e5e7eb',
+            borderRadius: '8px',
+            boxShadow: '0 10px 25px rgba(0,0,0,0.1)',
+            maxHeight: '300px',
+            overflowY: 'auto',
+            zIndex: 1000,
+            minWidth: '280px',
+            padding: '4px'
+          }}
+        >
+          <div style={{
+            padding: '8px 12px',
+            borderBottom: '1px solid #e5e7eb',
+            fontSize: '11px',
+            fontWeight: '600',
+            color: '#6b7280'
+          }}>
+            Insert Field {searchTerm && `(${fields.length} matches)`}
+          </div>
+          
+          {fields.map((field, index) => (
+            <div
+              key={field.id}
+              onClick={() => insertField(field)}
+              onMouseEnter={() => setSelectedIndex(index)}
+              style={{
+                padding: '10px 12px',
+                cursor: 'pointer',
+                background: selectedIndex === index ? '#eff6ff' : 'transparent',
+                borderRadius: '4px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>{getTypeIcon(field.type)}</span>
+                <div>
+                  <div style={{ fontSize: '13px', fontWeight: '500', fontFamily: 'Monaco, monospace' }}>
+                    {`{${field.label}}`}
+                  </div>
+                  <div style={{ fontSize: '11px', color: '#6b7280' }}>
+                    {field.type.replace(/_/g, ' ')}
+                  </div>
+                </div>
+              </div>
+              
+              {field.type === 'number_input' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    insertField(field, true);
+                  }}
+                  style={{
+                    padding: '4px 8px',
+                    fontSize: '10px',
+                    background: '#f3f4f6',
+                    border: '1px solid #d1d5db',
+                    borderRadius: '4px',
+                    cursor: 'pointer'
+                  }}
+                >
+                  + _qty
+                </button>
+              )}
+            </div>
+          ))}
+          
+          <div style={{
+            padding: '8px 12px',
+            borderTop: '1px solid #e5e7eb',
+            fontSize: '10px',
+            color: '#9ca3af'
+          }}>
+            ↑↓ navigate • Enter/Tab select • Esc close
+          </div>
+        </div>
+      )}
+      
+      <div style={{
+        marginTop: '8px',
+        padding: '10px',
+        background: '#f0f9ff',
+        borderRadius: '6px',
+        fontSize: '11px',
+        color: '#0369a1'
+      }}>
+        <strong>💡 Tip:</strong> Type <code style={{ background: '#fff', padding: '2px 6px', borderRadius: '3px' }}>{'{'}</code> to insert field names. Use <code style={{ background: '#fff', padding: '2px 6px', borderRadius: '3px' }}>_qty</code> suffix for raw quantities.
+      </div>
+    </div>
+  );
+};
 
 
 
@@ -745,6 +1047,7 @@ export default function FormBuilderEditor() {
     return { pages: [] };
   });
 
+  //advanced settings
   const [advancedSettings, setAdvancedSettings] = useState(() => {
     if (form?.advancedSettings) {
       return safeJSONParse(form.advancedSettings, {
@@ -763,6 +1066,44 @@ export default function FormBuilderEditor() {
       variantCostCalculation: false,
     };
   });
+
+  //cart settings
+  const [cartSettings, setCartSettings] = useState(() => {
+  if (form?.cartSettings) {
+    return safeJSONParse(form.cartSettings, {
+      mode: "existing_product",
+      baseProductId: "",
+      productVariantId: "",
+      redirectAfterAdd: true,
+      showSuccessMessage: true,
+      successMessage: "Added to cart!",
+      variantMapping: [],
+      generateSKU: true,
+      skuPrefix: "CUSTOM-",
+      requiresApproval: false,
+      sendEmail: true,
+      emailSubject: "Your Custom Form is Ready",
+      orderNoteTemplate: "Custom form submission\n\nConfiguration:\n{{form_data}}\n\nTotal: {{calculated_price}}"
+    });
+  }
+  return {
+    mode: "existing_product",
+    baseProductId: "",
+    productVariantId: "",
+    redirectAfterAdd: true,
+    showSuccessMessage: true,
+    successMessage: "Added to cart!",
+    variantMapping: [],
+    generateSKU: true,
+    skuPrefix: "CUSTOM-",
+    requiresApproval: false,
+    sendEmail: true,
+    emailSubject: "Your Custom Form is Ready",
+    orderNoteTemplate: "Custom form submission\n\nConfiguration:\n{{form_data}}\n\nTotal: {{calculated_price}}"
+  };
+})
+
+
 
   // helper - display saved state temporarily
   useEffect(() => {
@@ -1189,7 +1530,7 @@ const handleComponentDragEnd = () => {
       if (comp.buttonStyle) metadata.buttonStyle = comp.buttonStyle;
       if (comp.tableData) metadata.tableData = comp.tableData;
 
-      console.log(`🔍 CLIENT DEBUG - ${comp.type} metadata:`, metadata);
+      console.log(`DEBUG - ${comp.type} metadata:`, metadata);
 
       return {
       id: comp.id && String(comp.id).startsWith("temp-") ? undefined : comp.id,
@@ -1211,11 +1552,15 @@ const handleComponentDragEnd = () => {
     formData.append("formId", form.id);
     formData.append("name", formName);
     formData.append("fields", JSON.stringify(fieldsToSave));
-    // save canvas
+
+    // save canvas settings
     formData.append("formulaSettings", JSON.stringify(formulaSettings));
     formData.append("productSettings", JSON.stringify(productSettings));
     formData.append("nonProductSettings", JSON.stringify(nonProductSettings));
     formData.append("advancedSettings", JSON.stringify(advancedSettings));
+
+    //save cart settings
+    formData.append("cartSettings", JSON.stringify(cartSettings));
 
     fetcher.submit(formData, { method: "post", action: "/app/form-builder" });
   };
@@ -1266,8 +1611,8 @@ const handleComponentDragEnd = () => {
           onDragOver={handleDragOver}
         >
           <div style={{ fontSize: 48, marginBottom: 16 }}>📋</div>
-          <h3 style={{ marginBottom: 8, color: "#374151" }}>drag elements here</h3>
-          <div style={{ color: "#9ca3af" }}>start building your form by dragging elements from the sidebar</div>
+          <h3 style={styles.heading2}>drag elements here</h3>
+          <div style={styles.bodyText}>start building your form by dragging elements from the sidebar</div>
         </div>
       ) : (
         <div
@@ -1362,7 +1707,6 @@ const handleComponentDragEnd = () => {
       )}
 
     </div>
-    
 
     {/* Canvas section tabs - fixed at bottom */}
     <div style={styles.canvasSectionTabsContainer}>
@@ -1377,6 +1721,9 @@ const handleComponentDragEnd = () => {
         setNonProductSettings={setNonProductSettings}
         advancedSettings={advancedSettings}
         setAdvancedSettings={setAdvancedSettings}
+        cartSettings={cartSettings}
+        setCartSettings={setCartSettings}
+        components={components}
       />
     </div>
   </div>
@@ -1448,6 +1795,10 @@ function CanvasSectionTabs({
   setNonProductSettings,
   advancedSettings,
   setAdvancedSettings,
+  //props for cart settings
+  cartSettings,
+  setCartSettings,
+  components //pass components for element mapping
 }) {
   const addNonProductPage = () => {
     setNonProductSettings((prev) => ({
@@ -1474,7 +1825,7 @@ function CanvasSectionTabs({
     <div style={{ marginTop: 16, background: "#fff", borderRadius: 8, border: "1px solid #e5e7eb" }}>
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid #e5e7eb", padding: "0 12px" }}>
-        {["formula", "products", "non-products", "advanced"].map((tab) => (
+        {["formula", "products", "non-products", "cart", "advanced"].map((tab) => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -1487,9 +1838,10 @@ function CanvasSectionTabs({
               fontWeight: activeTab === tab ? 600 : 400,
               color: activeTab === tab ? "#3b82f6" : "#6b7280",
               textTransform: "capitalize",
+              position: "relative",
             }}
           >
-            {tab}
+            {tab === "cart" ? "Cart & Products" : tab }
           </button>
         ))}
       </div>
@@ -1500,202 +1852,262 @@ function CanvasSectionTabs({
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
               <label style={propertyStyles.label}>Formula</label>
-              <input
-                type="text"
+              <FormulaInput
                 value={formulaSettings.formula}
-                onChange={(e) => setFormulaSettings({ ...formulaSettings, formula: e.target.value })}
-                style={propertyStyles.input}
-                placeholder="e.g., [element_1] * [element_2]"
+                onChange={(newValue) => setFormulaSettings({ ...formulaSettings, formula: newValue })}
+                components={components}
+                placeholder="e.g., {Quantity} * ({Size} + {Color})"
+                multiline={true}
+                showConversion={false}
               />
-              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
-                Start typing to see suggestions, Press tab to insert, ↓ to browse, or{" "}
-                <a href="#" style={{ color: "#3b82f6" }}>learn more about formula</a>
-              </div>
-            </div>
-
-            <div>
-              <label style={propertyStyles.label}>Formula Label</label>
-              <input
-                type="text"
-                value={formulaSettings.formulaLabel}
-                onChange={(e) => setFormulaSettings({ ...formulaSettings, formulaLabel: e.target.value })}
-                style={propertyStyles.input}
-                placeholder="Enter formula label"
-              />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div>
-                <label style={propertyStyles.label}>Minimum Formula Value</label>
-                <input
-                  type="number"
-                  value={formulaSettings.minFormulaValue}
-                  onChange={(e) => setFormulaSettings({ ...formulaSettings, minFormulaValue: e.target.value })}
-                  style={propertyStyles.input}
-                  placeholder="0"
-                />
-              </div>
-
-              <div>
-                <label style={propertyStyles.label}>Formula Decimals</label>
-                <select
-                  value={formulaSettings.formulaDecimals}
-                  onChange={(e) => setFormulaSettings({ ...formulaSettings, formulaDecimals: e.target.value })}
-                  style={propertyStyles.input}
-                >
-                  <option value="0">0</option>
-                  <option value="1">1</option>
-                  <option value="2">2</option>
-                </select>
-              </div>
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-              <div>
-                <label style={propertyStyles.label}>Formula Prefix</label>
-                <input
-                  type="text"
-                  value={formulaSettings.formulaPrefix}
-                  onChange={(e) => setFormulaSettings({ ...formulaSettings, formulaPrefix: e.target.value })}
-                  style={propertyStyles.input}
-                  placeholder="e.g., $"
-                />
-              </div>
-
-              <div>
-                <label style={propertyStyles.label}>Formula Suffix</label>
-                <input
-                  type="text"
-                  value={formulaSettings.formulaSuffix}
-                  onChange={(e) => setFormulaSettings({ ...formulaSettings, formulaSuffix: e.target.value })}
-                  style={propertyStyles.input}
-                  placeholder="e.g., USD"
-                />
-              </div>
-            </div>
+  
+      {/* NEW: Helper text with examples */}
+      <div style={{ 
+        fontSize: 11, 
+        color: "#6b7280", 
+        marginTop: 8,
+        padding: 10,
+        background: "#f0f9ff",
+        borderRadius: 6,
+        border: "1px solid #bae6fd"
+      }}>
+        <strong style={{ color: "#0369a1", display: "block", marginBottom: 6 }}>
+          💡 Formula Examples:
+        </strong>
+        
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <div>
+            <code style={{ background: "#fff", padding: "2px 6px", borderRadius: 3 }}>
+              {'{Size}'} + {'{Color}'}
+            </code>
+            <span style={{ marginLeft: 8 }}>— Add two fields</span>
           </div>
-        )}
+          
+          <div>
+            <code style={{ background: "#fff", padding: "2px 6px", borderRadius: 3 }}>
+              {'{Quantity}'} * ({'{Base Price}'} + {'{Size}'})
+            </code>
+            <span style={{ marginLeft: 8 }}>— Quantity × total price</span>
+          </div>
+          
+          <div>
+            <code style={{ background: "#fff", padding: "2px 6px", borderRadius: 3 }}>
+              if({'{Quantity}'} {'>'} 100, {'{Price}'} * 0.85, {'{Price}'})
+            </code>
+            <span style={{ marginLeft: 8 }}>— 15% bulk discount</span>
+          </div>
+          
+          <div>
+            <code style={{ background: "#fff", padding: "2px 6px", borderRadius: 3 }}>
+              round({'{Price}'} * 1.08, 2)
+            </code>
+            <span style={{ marginLeft: 8 }}>— Add 8% tax</span>
+          </div>
+        </div>
+        
+        <div style={{ marginTop: 8, paddingTop: 8, borderTop: "1px solid #bae6fd" }}>
+          <a 
+            href="https://mathjs.org/docs/expressions/syntax.html" 
+            target="_blank"
+            style={{ color: "#0369a1", textDecoration: "none", fontWeight: 500 }}
+          >
+            View all Math.js functions →
+          </a>
+        </div>
+      </div>
+    </div>
 
-        {activeTab === "products" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <label style={propertyStyles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={productSettings.showOnAllProducts}
-                onChange={(e) => setProductSettings({ ...productSettings, showOnAllProducts: e.target.checked })}
-              />
-              <span>Show this calculator on all current and future products</span>
-            </label>
+                <div>
+                  <label style={propertyStyles.label}>Formula Label</label>
+                  <input
+                    type="text"
+                    value={formulaSettings.formulaLabel}
+                    onChange={(e) => setFormulaSettings({ ...formulaSettings, formulaLabel: e.target.value })}
+                    style={propertyStyles.input}
+                    placeholder="Enter formula label"
+                  />
+                </div>
 
-            {productSettings.showOnAllProducts && (
-              <div style={{ padding: 12, background: "#eff6ff", borderRadius: 6, fontSize: 13, color: "#1e40af" }}>
-                This calculator will automatically apply to any existing and future products that don't have a specific calculator enabled for it.
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div>
+                    <label style={propertyStyles.label}>Minimum Formula Value</label>
+                    <input
+                      type="number"
+                      value={formulaSettings.minFormulaValue}
+                      onChange={(e) => setFormulaSettings({ ...formulaSettings, minFormulaValue: e.target.value })}
+                      style={propertyStyles.input}
+                      placeholder="0"
+                    />
+                  </div>
+
+                  <div>
+                    <label style={propertyStyles.label}>Formula Decimals</label>
+                    <select
+                      value={formulaSettings.formulaDecimals}
+                      onChange={(e) => setFormulaSettings({ ...formulaSettings, formulaDecimals: e.target.value })}
+                      style={propertyStyles.input}
+                    >
+                      <option value="0">0</option>
+                      <option value="1">1</option>
+                      <option value="2">2</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                  <div>
+                    <label style={propertyStyles.label}>Formula Prefix</label>
+                    <input
+                      type="text"
+                      value={formulaSettings.formulaPrefix}
+                      onChange={(e) => setFormulaSettings({ ...formulaSettings, formulaPrefix: e.target.value })}
+                      style={propertyStyles.input}
+                      placeholder="e.g., $"
+                    />
+                  </div>
+
+                  <div>
+                    <label style={propertyStyles.label}>Formula Suffix</label>
+                    <input
+                      type="text"
+                      value={formulaSettings.formulaSuffix}
+                      onChange={(e) => setFormulaSettings({ ...formulaSettings, formulaSuffix: e.target.value })}
+                      style={propertyStyles.input}
+                      placeholder="e.g., USD"
+                    />
+                  </div>
+                </div>
               </div>
             )}
 
-            <div>
-              <label style={propertyStyles.label}>Select Products</label>
-              <button style={{ ...styles.primaryBtn, width: "100%" }}>Choose Shopify Products</button>
-              <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
-                {productSettings.selectedProducts.length} products selected
-              </div>
-            </div>
-          </div>
-        )}
-
-        {activeTab === "non-products" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            {nonProductSettings.pages.map((page) => (
-              <div key={page.id} style={{ padding: 12, background: "#f9fafb", borderRadius: 6, border: "1px solid #e5e7eb" }}>
-                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {activeTab === "products" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <label style={propertyStyles.checkboxLabel}>
                   <input
-                    type="text"
-                    value={page.pageName}
-                    onChange={(e) => updateNonProductPage(page.id, "pageName", e.target.value)}
-                    placeholder="Enter page name"
-                    style={propertyStyles.input}
+                    type="checkbox"
+                    checked={productSettings.showOnAllProducts}
+                    onChange={(e) => setProductSettings({ ...productSettings, showOnAllProducts: e.target.checked })}
                   />
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                    <input
-                      type="text"
-                      value={page.pageUrl}
-                      onChange={(e) => updateNonProductPage(page.id, "pageUrl", e.target.value)}
-                      placeholder="Paste page URL here"
-                      style={propertyStyles.inputSmall}
-                    />
-                    <input
-                      type="text"
-                      value={page.elementSelector}
-                      onChange={(e) => updateNonProductPage(page.id, "elementSelector", e.target.value)}
-                      placeholder="Paste copied selector"
-                      style={propertyStyles.inputSmall}
-                    />
+                  <span>Show this calculator on all current and future products</span>
+                </label>
+
+                {productSettings.showOnAllProducts && (
+                  <div style={{ padding: 12, background: "#eff6ff", borderRadius: 6, fontSize: 13, color: "#1e40af" }}>
+                    This calculator will automatically apply to any existing and future products that don't have a specific calculator enabled for it.
                   </div>
-                  <button onClick={() => deleteNonProductPage(page.id)} style={{ ...propertyStyles.deleteBtn, width: "100%" }}>
-                    🗑️ Remove Page
-                  </button>
+                )}
+
+                <div>
+                  <label style={propertyStyles.label}>Select Products</label>
+                  <button style={{ ...styles.primaryBtn, width: "100%" }}>Choose Shopify Products</button>
+                  <div style={{ marginTop: 8, fontSize: 12, color: "#6b7280" }}>
+                    {productSettings.selectedProducts.length} products selected
+                  </div>
                 </div>
               </div>
-            ))}
+            )}
 
-            <button onClick={addNonProductPage} style={propertyStyles.addMoreBtn}>
-              + Add Non-Product Page
-            </button>
+            {activeTab === "non-products" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                {nonProductSettings.pages.map((page) => (
+                  <div key={page.id} style={{ padding: 12, background: "#f9fafb", borderRadius: 6, border: "1px solid #e5e7eb" }}>
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <input
+                        type="text"
+                        value={page.pageName}
+                        onChange={(e) => updateNonProductPage(page.id, "pageName", e.target.value)}
+                        placeholder="Enter page name"
+                        style={propertyStyles.input}
+                      />
+                      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                        <input
+                          type="text"
+                          value={page.pageUrl}
+                          onChange={(e) => updateNonProductPage(page.id, "pageUrl", e.target.value)}
+                          placeholder="Paste page URL here"
+                          style={propertyStyles.inputSmall}
+                        />
+                        <input
+                          type="text"
+                          value={page.elementSelector}
+                          onChange={(e) => updateNonProductPage(page.id, "elementSelector", e.target.value)}
+                          placeholder="Paste copied selector"
+                          style={propertyStyles.inputSmall}
+                        />
+                      </div>
+                      <button onClick={() => deleteNonProductPage(page.id)} style={{ ...propertyStyles.deleteBtn, width: "100%" }}>
+                        🗑️ Remove Page
+                      </button>
+                    </div>
+                  </div>
+                ))}
+
+                <button onClick={addNonProductPage} style={propertyStyles.addMoreBtn}>
+                  + Add Non-Product Page
+                </button>
+              </div>
+            )}
+
+            {activeTab === "cart" && (
+              <CartSettingsPanel
+                cartSettings = {cartSettings}
+                setCartSettings = {setCartSettings}
+                components = {components}
+              />
+            )}
+
+            {activeTab === "advanced" && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <label style={propertyStyles.checkboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={advancedSettings.archiveCalculator}
+                    onChange={(e) => setAdvancedSettings({ ...advancedSettings, archiveCalculator: e.target.checked })}
+                  />
+                  <span>Archive Calculator</span>
+                </label>
+
+                <label style={propertyStyles.checkboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={advancedSettings.availableAtAllLocations}
+                    onChange={(e) => setAdvancedSettings({ ...advancedSettings, availableAtAllLocations: e.target.checked })}
+                  />
+                  <span>Available at All Locations</span>
+                </label>
+
+                <label style={propertyStyles.checkboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={advancedSettings.skuSameAsProduct}
+                    onChange={(e) => setAdvancedSettings({ ...advancedSettings, skuSameAsProduct: e.target.checked })}
+                  />
+                  <span>SKU Same as Product</span>
+                </label>
+
+                <label style={propertyStyles.checkboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={advancedSettings.variantWeightCalculation}
+                    onChange={(e) => setAdvancedSettings({ ...advancedSettings, variantWeightCalculation: e.target.checked })}
+                  />
+                  <span>Variant Weight Calculation</span>
+                </label>
+
+                <label style={propertyStyles.checkboxLabel}>
+                  <input
+                    type="checkbox"
+                    checked={advancedSettings.variantCostCalculation}
+                    onChange={(e) => setAdvancedSettings({ ...advancedSettings, variantCostCalculation: e.target.checked })}
+                  />
+                  <span>Variant Cost Calculation</span>
+                </label>
+              </div>
+            )}
           </div>
-        )}
-
-        {activeTab === "advanced" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <label style={propertyStyles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={advancedSettings.archiveCalculator}
-                onChange={(e) => setAdvancedSettings({ ...advancedSettings, archiveCalculator: e.target.checked })}
-              />
-              <span>Archive Calculator</span>
-            </label>
-
-            <label style={propertyStyles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={advancedSettings.availableAtAllLocations}
-                onChange={(e) => setAdvancedSettings({ ...advancedSettings, availableAtAllLocations: e.target.checked })}
-              />
-              <span>Available at All Locations</span>
-            </label>
-
-            <label style={propertyStyles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={advancedSettings.skuSameAsProduct}
-                onChange={(e) => setAdvancedSettings({ ...advancedSettings, skuSameAsProduct: e.target.checked })}
-              />
-              <span>SKU Same as Product</span>
-            </label>
-
-            <label style={propertyStyles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={advancedSettings.variantWeightCalculation}
-                onChange={(e) => setAdvancedSettings({ ...advancedSettings, variantWeightCalculation: e.target.checked })}
-              />
-              <span>Variant Weight Calculation</span>
-            </label>
-
-            <label style={propertyStyles.checkboxLabel}>
-              <input
-                type="checkbox"
-                checked={advancedSettings.variantCostCalculation}
-                onChange={(e) => setAdvancedSettings({ ...advancedSettings, variantCostCalculation: e.target.checked })}
-              />
-              <span>Variant Cost Calculation</span>
-            </label>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+        </div>
+      );
+    }
 
 // ==================== elements panel ====================
 function ElementsPanel({ onDragStart, onAdd }) {
@@ -3482,56 +3894,556 @@ function PropertiesPanel({
   );
 
   const renderConditionalDisplaySection = () => {
-    if (allComponents.length <= 1) return null;
+  if (allComponents.length <= 1) return null;
 
-    return (
-      <div style={{ ...propertyStyles.sectionWhite, background: "#fef3c7", borderColor: "#fcd34d" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+  //get all valid trigger elements(exclude current element and non-interactive elements
+  const validTriggerElements = allComponents
+    .map((comp, idx) => ({ ...comp, index: idx, position: idx + 1 }))
+    .filter((comp) => 
+      comp.index !== currentIndex && 
+      ![
+        "heading", 
+        "text_block", 
+        "calculation_display", 
+        "file_upload", 
+        "photo_editor"
+      ].includes(comp.type)
+    );
+
+  const cd = conditionalDisplay || {
+    enabled: false,
+    valueWhenNotDisplayed: "1",
+    triggerElementId: null,
+    operator: "exists",
+    value: "",
+    rules: [],
+    match: "all",
+    usePosition: true  // position over ID
+  };
+
+  //find selected trigger element to determine its type
+  const selectedTrigger = validTriggerElements.find(el => {
+    // Check both position and ID
+    if (cd.usePosition && cd.triggerElementId) {
+      const posMatch = cd.triggerElementId.match(/^element_(\d+)$/);
+      if (posMatch) {
+        return el.position === parseInt(posMatch[1]);
+      }
+    }
+    return el.id === cd.triggerElementId;
+  });
+
+  //helper to get conditions based on element type
+  const getConditions = (elementType) => {
+    switch(elementType){
+      case 'dropdown':
+      case 'radio':
+      case 'image_selector':
+        return [
+          { value: 'exists', label: '✓ has any option selected' },
+          { value: 'not_exists', label: '✗ has no option selected' },
+          { value: '==', label: '= equals (specific option)' },
+          { value: '!=', label: '≠ does not equal' }
+        ];
+      
+      case 'number_input':
+        return [
+          { value: 'exists', label: '✓ has any value entered' },
+          { value: 'not_exists', label: '✗ is empty' },
+          { value: '==', label: '= equals exactly' },
+          { value: '!=', label: '≠ does not equal' },
+          { value: '>', label: '> is more than' },
+          { value: '>=', label: '≥ is at least' },
+          { value: '<', label: '< is less than' },
+          { value: '<=', label: '≤ is at most' }
+        ];
+
+      case "checkbox":
+        return [
+          { value: 'exists', label: '✓ is checked' },
+          { value: 'not_exists', label: '✗ is not checked' },
+          { value: 'contains', label: '⊃ includes option' },
+          { value: 'not_contains', label: '⊅ does not include' }
+        ];
+
+      case "text_input": 
+        return [
+          { value: 'exists', label: '✓ has any text' },
+          { value: 'not_exists', label: '✗ is empty' },
+          { value: '==', label: '= equals exactly' },
+          { value: '!=', label: '≠ does not equal' },
+          { value: 'contains', label: '⊃ contains text' },
+          { value: 'not_contains', label: '⊅ does not contain' }
+        ];
+
+      default:
+        return [
+          { value: 'exists', label: '✓ has any value' },
+          { value: 'not_exists', label: '✗ is empty' },
+          { value: '==', label: '= equals' },
+          { value: '!=', label: '≠ does not equal' }
+        ];
+    }
+  };
+
+  //helper to check if value input is needed
+  const needsValueInput = (operator) => {
+    return !['exists', 'not_exists'].includes(operator);
+  };
+
+  // Simple mode: single trigger
+  const isSimpleMode = !cd.rules || cd.rules.length === 0;
+
+  const addRule = () => {
+    const newRules = cd.rules || [];
+    onUpdateConditionalDisplay({
+      ...cd,
+      rules: [
+        ...newRules,
+        { triggerElementId: "", operator: "exists", value: "" }
+      ]
+    });
+  };
+
+  //update rule
+  const updateRule = (index, field, value) => {
+    const newRules = [...(cd.rules || [])];
+    newRules[index] = { ...newRules[index], [field]: value };
+    onUpdateConditionalDisplay({ ...cd, rules: newRules });
+  };
+
+  const deleteRule = (index) => {
+    const newRules = (cd.rules || []).filter((_, i) => i !== index);
+    onUpdateConditionalDisplay({ ...cd, rules: newRules });
+  };
+
+  const switchToAdvanced = () => {
+    const newRule = {
+      triggerElementId: cd.triggerElementId || "",
+      operator: cd.operator || "exists",
+      value: cd.value || ""
+    };
+    onUpdateConditionalDisplay({
+      ...cd,
+      rules: [newRule],
+      triggerElementId: null
+    });
+  };
+
+  const switchToSimple = () => {
+    const firstRule = cd.rules?.[0];
+    onUpdateConditionalDisplay({
+      ...cd,
+      triggerElementId: firstRule?.triggerElementId || null,
+      operator: firstRule?.operator || "exists",
+      value: firstRule?.value || "",
+      rules: []
+    });
+  };
+
+  return (
+    <div style={{
+      ...propertyStyles.sectionWhite, 
+      background: "#fef3c7", 
+      borderColor: "#fcd34d"
+    }}>
+      {/*header*/}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginBottom: 12
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 20 }}>⚡</span>
-          <label style={{ ...propertyStyles.label, marginBottom: 0 }}>Conditional Display</label>
+          <label style={{ ...propertyStyles.label, marginBottom: 0 }}>
+            Conditional Display
+          </label>
         </div>
 
-        <label style={propertyStyles.checkboxLabel}>
-          <input type="checkbox" checked={conditionalDisplay?.enabled || false} 
-          onChange={(e) => onUpdateConditionalDisplay({ ...conditionalDisplay, enabled: e.target.checked })} />
-          <span>Enable Conditional Display</span>
-        </label>
-
-        {conditionalDisplay?.enabled && (
-          <>
-            <div style={{ marginTop: 12 }}>
-              <label style={propertyStyles.labelSmall}>Value When Not Displayed</label>
-              <input type="number" value={conditionalDisplay?.valueWhenNotDisplayed || "1"} 
-              onChange={(e) => onUpdateConditionalDisplay({ ...conditionalDisplay, valueWhenNotDisplayed: e.target.value })} 
-              style={propertyStyles.input} placeholder="1" />
-              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
-                Value used in formulas when this element is hidden
-              </div>
-            </div>
-
-            <div style={{ marginTop: 12 }}>
-              <label style={propertyStyles.labelSmall}>Select Trigger Element (Image Selector)</label>
-              <select value={conditionalDisplay?.triggerElementId || ""} 
-              onChange={(e) => onUpdateConditionalDisplay({ ...conditionalDisplay, triggerElementId: e.target.value })} 
-              style={propertyStyles.input}>
-                <option value="">--Select Image Selector--</option>
-                {imageSelectorElements.map((el) => (
-                  <option key={el.id} value={el.id}>
-                    {el.label || `Image Selector ${el.index + 1}`}
-                  </option>
-                ))}
-              </select>
-              {imageSelectorElements.length === 0 && <div style={{ fontSize: 11, color: "#dc2626", marginTop: 4 }}>⚠️ No Image Selector elements available. Add an Image Selector element first.</div>}
-            </div>
-
-            <div style={{ marginTop: 12, padding: 10, background: "#fef9c3", borderRadius: 4, fontSize: 11, color: "#854d0e" }}>
-              💡 <strong>How it works:</strong> This element will only be visible when a specific option is selected in the chosen Image Selector element.
-            </div>
-          </>
+        {cd.enabled && validTriggerElements.length > 0 && (
+          <button 
+            onClick={isSimpleMode ? switchToAdvanced : switchToSimple}
+            style={{
+              padding: "4px 8px",
+              fontSize: 11,
+              borderRadius: 4,
+              border: "1px solid #92400e",
+              background: "#fef3c7",
+              color: "#92400e",
+              cursor: "pointer",
+              fontWeight: 500
+            }}>
+            {isSimpleMode ? "⚙️ Advanced" : "⬅️ Simple"}
+          </button>
         )}
       </div>
-    );
-  };
+
+      {/*enable toggle*/}
+      <label style={propertyStyles.checkboxLabel}>
+        <input 
+          type="checkbox" 
+          checked={cd.enabled} 
+          onChange={(e) => onUpdateConditionalDisplay({ 
+            ...cd, 
+            enabled: e.target.checked 
+          })} 
+        />
+        <span>Enable Conditional Display</span>
+      </label>
+
+      {cd.enabled && (
+        <>
+          {/*value when hidden*/}
+          <div style={{ marginTop: 12}}>
+            <label style={propertyStyles.labelSmall}>
+              Value when hidden
+            </label>
+            <input
+              type="number"
+              value={cd.valueWhenNotDisplayed || "1"}
+              onChange={(e) => onUpdateConditionalDisplay({
+                ...cd,
+                valueWhenNotDisplayed: e.target.value
+              })}
+              style={propertyStyles.input}
+              placeholder="1"
+            />
+            <div style={{ fontSize: 11, color: "#854d0e", marginTop: 4 }}>
+              Value used in formulas when this element is hidden
+            </div>
+          </div>
+
+          {/*Reference Type Toggle */}
+          <div style={{ marginTop: 12, padding: 10, background: "#fffbeb", borderRadius: 6, border: "1px solid #fcd34d" }}>
+            <label style={propertyStyles.checkboxLabel}>
+              <input
+                type="checkbox"
+                checked={cd.usePosition !== false}
+                onChange={(e) => onUpdateConditionalDisplay({
+                  ...cd,
+                  usePosition: e.target.checked
+                })}
+              />
+              <span>Use Position Referencee</span>
+            </label>
+            <div style={{ fontSize: 11, color: "#92400e", marginTop: 4, marginLeft: 24 }}>
+              {cd.usePosition !== false 
+                ? "Using element_1, element_2, etc, better than element ids"
+                : "Using element IDs"}
+            </div>
+          </div>
+
+          {validTriggerElements.length === 0 ? (
+            <div style={{
+              marginTop: 12,
+              padding: 10,
+              background: "#fee2e2",
+              border: "1px solid #fca5a5",
+              borderRadius: 6,
+              fontSize: 12,
+              color: "#991b1b"
+            }}>
+              ⚠️ No valid trigger elements available. Add interactive elements 
+              (dropdown, number input, checkbox, etc.) first.
+            </div>
+          ) : ( 
+            <>
+              {/*simple mode*/}
+              {isSimpleMode ? (
+                <>
+                  <div style={{ marginTop: 12}}>
+                    <label style={propertyStyles.labelSmall}>
+                      Trigger Element
+                    </label>
+                    <select
+                      value={cd.triggerElementId || ""}
+                      onChange={(e) => {
+                        const selectedEl = validTriggerElements.find(el => 
+                          cd.usePosition !== false 
+                            ? `element_${el.position}` === e.target.value
+                            : el.id === e.target.value
+                        );
+                        
+                        onUpdateConditionalDisplay({
+                          ...cd,
+                          triggerElementId: e.target.value,
+                          operator: "exists"
+                        });
+                      }}
+                      style={propertyStyles.input}
+                    >
+                      <option value="">Select Element</option>
+                      {validTriggerElements.map((el) => {
+                        const value = cd.usePosition !== false ? `element_${el.position}` : el.id;
+                        const display = cd.usePosition !== false 
+                          ? `Element ${el.position}: ${el.label || el.type}`
+                          : el.label || `${el.type} ${el.index + 1}`;
+                        
+                        return (
+                          <option key={el.id} value={value}>
+                            {display}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {cd.usePosition !== false && cd.triggerElementId && (
+                      <div style={{ fontSize: 10, color: "#059669", marginTop: 4, display: "flex", alignItems: "center", gap: 4 }}>
+                        <span>✓</span>
+                        <span>Using position reference: {cd.triggerElementId}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {cd.triggerElementId && (
+                    <>
+                      <div style={{ marginTop: 12}}>
+                        <label style={propertyStyles.labelSmall}>
+                          Condition (When to show this field)
+                        </label>
+                        <select
+                          value={cd.operator || "exists"}
+                          onChange={(e) => onUpdateConditionalDisplay({
+                            ...cd,
+                            operator: e.target.value
+                          })}  
+                          style={propertyStyles.input}
+                        >
+                          {getConditions(selectedTrigger?.type).map(opt => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {needsValueInput(cd.operator || "exists") && (
+                        <div style={{ marginTop: 12}}>
+                          <label style={propertyStyles.labelSmall}>
+                            Compare Value
+                          </label>
+                          <input
+                            type="text"
+                            value={cd.value || "" }
+                            onChange={(e) => onUpdateConditionalDisplay({
+                              ...cd,
+                              value: e.target.value
+                            })}
+                            style={propertyStyles.input}
+                            placeholder="Enter value to compare"
+                          />
+                          <div style={{ fontSize: 11, color: "#854d0e", marginTop: 4 }}>
+                            💡 For dropdowns/radios: enter the option value or ID
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/*preview box*/}
+                  {cd.triggerElementId && (
+                    <div style={{
+                      marginTop: 12,
+                      padding: 10,
+                      background: "#f0fdf4",
+                      border: "1px solid #86efac",
+                      borderRadius: 6,
+                      fontSize: 12
+                    }}>
+                      <strong>✓ Preview:</strong>
+                      <div style={{ marginTop: 4, color: "#166534"}}>
+                        This field will <strong>show</strong> when{' '}
+                        <strong>"{selectedTrigger?.label || cd.triggerElementId}"</strong>{' '}
+                        <strong>{getConditions(selectedTrigger?.type).find(o => o.value === (cd.operator || 'exists'))?.label.replace(/^[✓✗=≠><≥≤⊃⊅]\s*/, '')}</strong>
+                        {cd.value && <React.Fragment> <strong>"{cd.value}"</strong></React.Fragment>}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                // Advanced mode
+                <>
+                  <div style={{ marginTop: 12}}>
+                    <label style={propertyStyles.labelSmall}>
+                      Match Type
+                    </label>
+                    <select
+                      value={cd.match || "all"}
+                      onChange={(e) => onUpdateConditionalDisplay({
+                        ...cd,
+                        match: e.target.value
+                      })}
+                      style={propertyStyles.input}
+                    >
+                      <option value="all">Match ALL conditions (AND)</option>
+                      <option value="any">Match ANY condition (OR)</option>
+                    </select>
+                  </div>
+
+                  <div style={{ marginTop: 12}}>
+                    <div style={{
+                      display: "flex", 
+                      justifyContent: "space-between",
+                      alignItems: "center",
+                      marginBottom: 8
+                    }}>
+                      <label style={{
+                        ...propertyStyles.labelSmall,
+                        marginBottom: 0
+                      }}>
+                        Conditions ({cd.rules?.length || 0})
+                      </label>
+                      <button
+                        onClick={addRule}
+                        style={{
+                          padding: "4px 8px",
+                          fontSize: 11,
+                          borderRadius: 4,
+                          border: "none",
+                          background: "#10b981",
+                          color: "#fff",
+                          cursor: "pointer",
+                          fontWeight: 500
+                        }}
+                      >
+                        + Add Condition
+                      </button>
+                    </div>
+
+                    {(!cd.rules || cd.rules.length === 0) ? (
+                      <div style={{
+                        padding: 12,
+                        background: "#fef3c7",
+                        border: "1px dashed #fcd34d",
+                        borderRadius: 6,
+                        fontSize: 12,
+                        color: "#92400e",
+                        textAlign: "center"
+                      }}>
+                        No conditions yet. Click "+ Add" to create one.
+                      </div>
+                    ) : (
+                      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {cd.rules.map((rule, index) => {
+                          const ruleElement = validTriggerElements.find(el => {
+                            if (cd.usePosition !== false) {
+                              const posMatch = rule.triggerElementId?.match(/^element_(\d+)$/);
+                              return posMatch && el.position === parseInt(posMatch[1]);
+                            }
+                            return el.id === rule.triggerElementId;
+                          });
+                          
+                          return (
+                            <div key={index}
+                              style={{
+                                padding: 10,
+                                background: "#fff",
+                                border: "1px solid #fcd34d",
+                                borderRadius: 6
+                              }}
+                            >
+                              <label style={{ ...propertyStyles.labelSmall, fontSize: 10 }}>
+                                Trigger Element
+                              </label>
+                              <select
+                                value={rule.triggerElementId || ""}
+                                onChange={(e) => updateRule(index, "triggerElementId", e.target.value)}
+                                style={{ ...propertyStyles.input, marginBottom: 6 }}
+                              >
+                                <option value="">Select Element</option>
+                                {validTriggerElements.map((el) => {
+                                  const value = cd.usePosition !== false ? `element_${el.position}` : el.id;
+                                  const display = cd.usePosition !== false 
+                                    ? `Element ${el.position}: ${el.label || el.type}`
+                                    : el.label || `${el.type} ${el.index + 1}`;
+                                  
+                                  return (
+                                    <option key={el.id} value={value}>
+                                      {display}
+                                    </option>
+                                  );
+                                })}
+                              </select>
+                              
+                              <label style={{ ...propertyStyles.labelSmall, fontSize: 10}}>
+                                Condition
+                              </label>
+                              <select
+                                value={rule.operator || "exists"}
+                                onChange={(e) => updateRule(index, "operator", e.target.value)}
+                                style={{...propertyStyles.input, marginBottom: 6}}
+                              >
+                                {getConditions(ruleElement?.type).map(opt => (
+                                  <option key={opt.value} value={opt.value}>
+                                    {opt.label}
+                                  </option>
+                                ))}
+                              </select>
+
+                              {needsValueInput(rule.operator || "exists") && (
+                                <>
+                                  <label style={{...propertyStyles.labelSmall, fontSize: 10}}>
+                                    Compare Value
+                                  </label>
+                                  <input
+                                    type="text"
+                                    value={rule.value || ""}
+                                    onChange={(e) => updateRule(index, "value", e.target.value)}
+                                    placeholder="Enter value"
+                                    style={{...propertyStyles.input, marginBottom: 6}}
+                                  />
+                                </>
+                              )}
+
+                              <button
+                                onClick={()=>deleteRule(index)}
+                                style={{
+                                  width: "100%",
+                                  padding: "6px",
+                                  fontSize: 11,
+                                  borderRadius: 4,
+                                  border: "none",
+                                  background: "#fee2e2",
+                                  color: "#991b1b",
+                                  cursor: "pointer",
+                                  fontWeight: 500
+                                }}
+                              >
+                                🗑️ Remove
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </>
+          )}
+        </>
+      )}
+
+      {/*info box*/}
+      <div style={{
+        marginTop: 12, 
+        padding: 10, 
+        background: "#fef9c3", 
+        borderRadius: 4, 
+        fontSize: 11, 
+        color: "#854d0e"
+      }}>
+        <strong>💡 How it works:</strong>
+        <br/>
+        {isSimpleMode ? (
+          <>This element will only be visible when the condition is met.</>
+        ) : (
+          <>This element will be visible when <strong>{cd.match === "all" ? "ALL" : "ANY"}</strong> conditions are met.</>
+        )}
+      </div>
+    </div>
+  );
+};
 
   const renderAdditionalInfoSection = () => (
     <div style={propertyStyles.additionalInfo}>
@@ -3907,63 +4819,289 @@ function PropertiesPanel({
         </>
       )}
 
-
-
       {type === "number_input" && (
         <>
           <div style={propertyStyles.sectionBlue}>
-            <label style={propertyStyles.label}>Number Input Settings</label>
+            <label style={propertyStyles.label}>
+              Number Input Settings
+            </label>
 
             <label style={propertyStyles.checkboxLabel}>
-              <input type="checkbox" checked={settings?.useAsQuantity || false} onChange={(e) => onUpdateSettings({ ...(settings || {}), useAsQuantity: e.target.checked })} />
-              <span>Use as Quantity (Product Cart Quantity)</span>
+              <input
+                type="checkbox"
+                checked={settings?.useAsQuantity || false}
+                onChange={(e) => onUpdateSettings({...(settings || {}), useAsQuantity: e.target.checked})}
+              />
+              <span>Use as Quantity(Product Cart Quantity)</span>
             </label>
 
             {!settings?.useAsQuantity && (
               <>
-                <label style={{ ...propertyStyles.labelSmall, marginTop: 8 }}>Max Decimal Places</label>
-                <input type="range" min="0" max="10" value={settings?.maxDecimal || 0} onChange={(e) => onUpdateSettings({ ...(settings || {}), maxDecimal: parseInt(e.target.value, 10) })} style={{ width: "100%" }} />
-                <div style={{ fontSize: 12, color: "#6b7280" }}>Current: {settings?.maxDecimal || 0}</div>
+                <label style={{...propertyStyles.labelSmall, marginTop: 8}}>Max Decimal Places</label>
+                <input
+                  type="range"
+                  min='0'
+                  max='10'
+                  value={settings?.maxDecimal || 0}
+                  onChange={(e) => onUpdateSettings({ ...(settings || {}), maxDecimal:parseInt(e.target.value, 10) })}
+                  style={{ width: "100%"}}
+                />
+                <div style={{ fontSize: 12, color: '#6b7280'}}>
+                  Current: {settings?.maxDecimal || 0}
+                </div>
               </>
             )}
 
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 8 }}>
+            {/* Default Value Field */}
+            <div style={{ marginTop: 12 }}>
+              <label style={propertyStyles.labelSmall}>Default Value</label>
+              <input 
+                type="number" 
+                value={settings?.defaultValue || ""} 
+                onChange={(e) => onUpdateSettings({ 
+                  ...(settings || {}), 
+                  defaultValue: e.target.value 
+                })} 
+                style={propertyStyles.inputSmall} 
+                placeholder="e.g., 25 for base price" 
+              />
+              <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                Pre-filled value when form loads. Perfect for base prices or hidden calculations.
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginTop: 8}}>
               <div>
                 <label style={propertyStyles.labelSmall}>Minimum Value</label>
-                <input type="number" value={settings?.minValue || "0"} onChange={(e) => onUpdateSettings({ ...(settings || {}), minValue: e.target.value })} style={propertyStyles.inputSmall} placeholder="0" />
+                <input 
+                  type="number" 
+                  value={settings?.minValue || "0"} 
+                  onChange={(e) => onUpdateSettings({ ...(settings || {}), minValue: e.target.value })} 
+                  style={propertyStyles.inputSmall} 
+                  placeholder="0" 
+                />
               </div>
               <div>
                 <label style={propertyStyles.labelSmall}>Maximum Value</label>
-                <input type="number" value={settings?.maxValue || "10000"} onChange={(e) => onUpdateSettings({ ...(settings || {}), maxValue: e.target.value })} style={propertyStyles.inputSmall} placeholder="10000" />
+                <input 
+                  type="number" 
+                  value={settings?.maxValue || "10000"} 
+                  onChange={(e) => onUpdateSettings({ ...(settings || {}), maxValue: e.target.value })} 
+                  style={propertyStyles.inputSmall} 
+                  placeholder="10000" 
+                />
               </div>
             </div>
           </div>
 
           <div style={propertyStyles.sectionWhite}>
-            <label style={propertyStyles.label}>Value Ranges (Bulk Pricing)</label>
-            <div style={{ fontSize: 11, color: "#6b7280", marginBottom: 8 }}>Define different values based on input ranges (e.g., quantity discounts)</div>
-            {valueRanges.map((r) => (
-              <div key={r.id} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 40px", gap: 8, alignItems: "center", marginBottom: 8 }}>
-                <input type="number" value={r.start} onChange={(e) => updateValueRange(r.id, "start", e.target.value)} style={propertyStyles.inputSmall} placeholder="Start" />
-                <input type="number" value={r.end} onChange={(e) => updateValueRange(r.id, "end", e.target.value)} style={propertyStyles.inputSmall} placeholder="End" />
-                <input type="number" value={r.value} onChange={(e) => updateValueRange(r.id, "value", e.target.value)} style={propertyStyles.inputSmall} placeholder="Value" />
-                <button onClick={() => deleteValueRange(r.id)} disabled={valueRanges.length <= 1} style={propertyStyles.deleteBtn} title="Delete range">🗑️</button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <label style={{ ...propertyStyles.label, marginBottom: 0 }}>
+                Value Ranges (Bulk Pricing)
+              </label>
+
+              <button
+                onClick={() => onUpdateSettings({
+                  ...(settings || {}),
+                  valueRangeEnabled: !settings?.valueRangeEnabled
+                })}
+                style={{
+                  padding: "6px 12px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: settings?.valueRangeEnabled ? "#10b981" : "#d1d5db",
+                  color: "#fff",
+                  cursor: "pointer",
+                  fontSize: 12,
+                  fontWeight: 500,
+                  transition: "all 0.2s",
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                }}
+              >
+                {settings?.valueRangeEnabled?"✓ Enabled" : "○ Disabled"}
+              </button>
+            </div>
+
+            <div style={{
+              fontSize: 11, 
+              color: "#6b7280", 
+              marginBottom: 12,
+              padding: 10,
+              background: "#f0f9ff",
+              borderRadius: 6,
+              border: "1px solid #bae6fd",
+            }}>
+              <strong>What are Value Ranges?</strong>
+              <br />
+              Define different values based on input ranges. Perfect for bulk pricing (e.g., 1-10 units = $10/each, 11-50 units = $8/each).
+            </div>
+
+            {settings?.valueRangeEnabled? (
+              <>
+                {/* Value range inputs */}
+            {(valueRanges && valueRanges.length > 0) ? valueRanges.map((r, index) => (
+              <div
+                key={r.id}
+                style={{
+                  display: "grid", 
+                  gridTemplateColumns: "1fr 1fr 1fr 40px", 
+                  gap: 8, 
+                  alignItems: "center", 
+                  marginBottom: 8,
+                  padding: 8,
+                  background: index % 2 === 0 ? "#f9fafb" : "#fff",
+                  borderRadius: 4,
+                  border: "1px solid #e5e7eb",
+                }}
+              >
+                <input 
+                  type="number" 
+                  value={r.start} 
+                  onChange={(e) => updateValueRange(r.id, "start", e.target.value)} 
+                  style={propertyStyles.inputSmall} 
+                  placeholder="Start" 
+                />
+                <input 
+                  type="number" 
+                  value={r.end} 
+                  onChange={(e) => updateValueRange(r.id, "end", e.target.value)} 
+                  style={propertyStyles.inputSmall} 
+                  placeholder="End" 
+                />
+                <input 
+                  type="number" 
+                  value={r.value} 
+                  onChange={(e) => updateValueRange(r.id, "value", e.target.value)} 
+                  style={propertyStyles.inputSmall} 
+                  placeholder="Value" 
+                />
+                <button 
+                  onClick={() => deleteValueRange(r.id)} 
+                  disabled={valueRanges.length <= 1} 
+                  style={{
+                    ...propertyStyles.deleteBtn,
+                    opacity: valueRanges.length <= 1 ? 0.5 : 1,
+                    cursor: valueRanges.length <= 1 ? 'not-allowed' : 'pointer'
+                  }} 
+                  title="Delete range"
+                >
+                  🗑️
+                </button>
               </div>
-            ))}
-            <button onClick={addValueRange} style={propertyStyles.addMoreBtn}>+ Add Value Range</button>
+            )) : (
+              <div style={{
+                padding: 12,
+                background: "#fef3c7",
+                border: "1px solid #fcd34d",
+                borderRadius: 6,
+                fontSize: 12,
+                color: "#92400e",
+                textAlign: "center",
+                marginBottom: 12
+              }}>
+                No value ranges configured yet. Click "Add Value Range" to start.
+              </div>
+            )}
+            
+            <button
+              onClick={addValueRange}
+              style={propertyStyles.addMoreBtn}
+            >
+              + Add Value Range
+            </button>
+
+            {/* Example Usage */}
+            {valueRanges && valueRanges.length > 0 && (
+              <div style={{ 
+                marginTop: 12,
+                padding: 10,
+                background: "#ecfdf5",
+                border: "1px solid #6ee7b7",
+                borderRadius: 6,
+                fontSize: 11,
+                color: "#065f46",
+              }}>
+                <strong>📊 Current Ranges:</strong>
+                <div style={{ marginTop: 6 }}>
+                  {valueRanges.map((r, idx) => (
+                    <div key={r.id} style={{ marginBottom: 2 }}>
+                      • {r.start} to {r.end}: value = <strong>{r.value}</strong>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+              </>
+            ): (
+              <div style={{ 
+                padding: 16,
+                background: "#f9fafb",
+                border: "2px dashed #d1d5db",
+                borderRadius: 6,
+                textAlign: "center",
+                color: "#6b7280",
+                fontSize: 12,
+              }}>
+                <div style={{ fontSize: 24, marginBottom: 8 }}>📊</div>
+                <div>Value ranges are currently disabled</div>
+                <div style={{ marginTop: 4, fontSize: 11 }}>
+                  Enable to set up bulk pricing or tiered values
+                </div>
+              </div>
+            )}
           </div>
+
           {renderConditionalDisplaySection()}
           {renderTooltipSection()}
           {renderAdditionalInfoSection()}
         </>
       )}
 
+      {/* Hide Element Section */}
+      <div style={propertyStyles.sectionWhite}>
+        <label style={propertyStyles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={settings?.hidden || false}
+            onChange={(e) => onUpdateSettings({
+              ...(settings || {}), 
+              hidden: e.target.checked
+            })}
+          />
+          <span>Hide this element from customers</span>
+        </label>
+        <div style={{ 
+          fontSize: 11, 
+          color: '#6b7280', 
+          marginTop: 6, 
+          marginLeft: 20,
+          padding: 8,
+          background: '#fef3c7',
+          borderRadius: 4,
+          border: '1px solid #fcd34d'
+        }}>
+          💡 <strong>Use case:</strong> Hidden elements can still be used in calculations 
+          (e.g., base price = 25) but won't be visible to customers.
+        </div>
+      </div>
+
       {type === "calculation_display" && (
         <>
           <div style={propertyStyles.sectionBlue}>
             <label style={propertyStyles.label}>Formula</label>
-            <input type="text" value={settings?.formula || ""} onChange={(e) => onUpdateSettings({ ...(settings || {}), formula: e.target.value })} style={propertyStyles.input} placeholder="e.g., [element_1] * [element_2] + 10" />
-            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>Use [element_X] to reference other elements by their position</div>
+            <FormulaInput
+              value={settings?.formula || ""}
+              onChange={(newValue) => onUpdateSettings({ ...(settings || {}), formula: newValue })}
+              components={components}
+              placeholder="e.g., {Size} * {Color} + 10"
+              multiline={false}
+              showConversion={false}
+            />
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+              Use {'{Field Name}'} to reference elements. Type {'{'}  to see autocomplete.
+            </div>
           </div>
 
           <div style={propertyStyles.sectionWhite}>
@@ -4695,6 +5833,1186 @@ function RenderComponent({ component = {}, preview = false }) {
   }
 }
 
+
+//==========cart settings panel==================
+function CartSettingsPanel({ cartSettings, setCartSettings, components }) {
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [loadingProducts, setLoadingProducts] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [variants, setVariants] = useState([]);
+
+  //load products from shopify
+  const loadProducts = async () => {
+    setLoadingProducts(true);
+    try {
+      const response = await fetch('/api/cart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'get_products' })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setProducts(data.products);
+      }
+    } catch (error) {
+      console.error('Error loading products:', error);
+    }
+    setLoadingProducts(false);
+  };
+
+
+  //load variants when product is selected
+  const loadVariants = async (productId) => {
+    if (!productId) {
+      setVariants([]);
+      return;
+    }
+    try {
+      const response = await fetch('/api/cart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          action: 'get_product_variants',
+          data: { productId }
+        })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setVariants(data.variants);
+      }
+    } catch (error) {
+      console.error('Error loading variants:', error);
+    }
+  };
+
+  //add variant mapping
+  const addVariantMapping = () => {
+    const currentMappings = cartSettings.variantMapping || [];
+    if (currentMappings.length >= 3) {
+      alert('Maximum 3 variant options are allowed only');
+      return;
+    }
+    setCartSettings({
+      ...cartSettings,
+      variantMapping: [...currentMappings, { elementId: '', optionName: ''}]
+    });
+  };
+
+  //update variant mapping
+  const updateVariantMapping = (index, field, value) => {
+    const newMappings = [...(cartSettings.variantMapping || [])];
+    newMappings[index] = {...newMappings[index], [field]: value };
+    setCartSettings({ ...cartSettings, variantMapping: newMappings });
+  };
+
+  //remove variant mapping
+  const removeVariantMapping = (index) => {
+    const newMappings = (cartSettings.variantMapping || []).filter((_, i) => i !== index);
+    setCartSettings({ ...cartSettings, variantMapping: newMappings });
+  };
+
+  const modes = [
+    {
+      id: 'existing_product',
+      icon: '📦',
+      title: 'Use Existing Product',
+      shortDesc: "",
+      fullDesc: 'Select a product from your Shopify store. Form data is saved as line item properties. Best for adding custom options to existing products.',
+      whenToUse: 'Perfect for: Product customization, personalization, add-ons'
+    },
+    {
+      id: 'dynamic_variant',
+      icon: '⚡',
+      title: 'Create Variant Dynamically',
+      shortDesc: '',
+      fullDesc: 'Automatically create new product variants based on customer selections. Each unique combination becomes a separate variant with its own SKU.',
+      whenToUse: 'Perfect for: Bulk pricing, custom configurations, made-to-order products'
+    },
+    {
+      id: 'draft_order',
+      icon: '📋',
+      title: 'Create Draft Order (Quote)',
+      shortDesc:'',
+      fullDesc: 'Generate a quote that requires admin approval before payment. Customer receives an invoice link after review. Ideal for wholesale and custom orders.',
+      whenToUse: 'Perfect for: B2B sales, custom quotes, wholesale orders, approval workflows'
+    }
+  ];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {/*mode selection */}
+      <div>
+        <h3 style={{
+          ...styles.heading2,
+          margin: '0 0 12px 0',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8
+        }}>
+          Cart Behavior Mode
+        </h3>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {modes.map(mode => (
+            <button
+              key={mode.id}
+              onClick={() => setCartSettings({ ...cartSettings, mode: mode.id})}
+              style={{
+                padding: 12,
+                border: cartSettings.mode === mode.id ? '2px solid #3b82f6' : '2px solid #e5e7eb',
+                borderRadius: 6,
+                background: cartSettings.mode === mode.id ? '#eff6ff' : 'white',
+                cursor: 'pointer',
+                textAlign: 'left',
+                transition: 'all 0.2s'
+              }}
+            >
+              <div style={{ display: 'flex', gap: 10, alignItems: 'start'}}>
+                {/*icon*/}
+                <div style={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 8,
+                  background: cartSettings.mode === mode.id 
+                    ? 'linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)' 
+                    : '#f9fafb',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 24,
+                  flexShrink: 0,
+                  border: cartSettings.mode === mode.id ? '2px solid #3b82f6' : '2px solid transparent',
+                  transition: 'all 0.2s ease'
+                }}>
+                  {mode.icon}
+                </div>
+
+                {/*content*/}
+                <div style={{flex: 1}}>
+                  {/*title ansd short desc*/}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ 
+                      fontWeight: 700, 
+                      fontSize: 16, 
+                      color: '#1e40af'  
+                    }}>
+                      {mode.title}
+                    </span>
+                    {cartSettings.mode === mode.id && (
+                      <span style={{ 
+                        color: '#10b981', 
+                        fontSize: 20, 
+                        flexShrink: 0,
+                        lineHeight: 1
+                      }}>
+                        ✓
+                      </span>
+                    )}
+                    </div>
+                    <div style={{
+                      fontSize: 13,
+                      fontWeight: 600,
+                      color: '#6366f1',
+                      marginBottom: 6
+                    }}>
+                      {mode.shortDesc}
+                    </div>
+                  </div>
+
+                  {/*full desc*/}
+                  <p style={{
+                    margin: '0 0 8px 0',
+                    fontSize: 13,
+                    lineHeight: '1.5',
+                    color: '#475569'
+                  }}>
+                    {mode.fullDesc}
+                  </p>
+
+                  {/*when to use*/}
+                  <div style={{
+                    padding: '8px 12px',
+                    background: cartSettings.mode === mode.id 
+                      ? 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)'
+                      : '#f0f9ff',
+                    borderRadius: 6,
+                    borderLeft: '3px solid ' + (cartSettings.mode === mode.id ? '#10b981' : '#60a5fa')
+                  }}>
+                    <span style={{ 
+                      fontSize: 12, 
+                      color: '#1e3a8a',
+                      fontWeight: 500
+                    }}>
+                    ℹ️ {mode.whenToUse}
+                    </span>
+                  </div>
+
+              </div>
+              
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/*mode specific settings*/}
+      <div style={{
+        background: '#f9fafb',
+        border: '1px solid #e5e7eb',
+        borderRadius: 6,
+        padding: 16
+      }}>
+        {cartSettings.mode === "existing_product" && (
+          <ExistingProductSettings
+            settings={cartSettings}
+            setSettings={setCartSettings}
+            products={products}
+            variants={variants}
+            loadingProducts={loadingProducts}
+            onLoadProducts={loadProducts}
+            onLoadVariants={loadVariants}
+          />
+        )}
+
+        {cartSettings.mode === 'dynamic_variant' && (
+          <DynamicVariantSettings
+            settings={cartSettings}
+            setSettings={setCartSettings}
+            components={components}
+            products={products}
+            loadingProducts={loadingProducts}
+            onLoadProducts={loadProducts}
+            onAddMapping={addVariantMapping}
+            onUpdateMapping={updateVariantMapping}
+            onRemoveMapping={removeVariantMapping}
+          />
+        )}
+
+        {cartSettings.mode === 'draft_order' && (
+          <DraftOrderSettings
+            settings={cartSettings}
+            setSettings={setCartSettings}
+          />
+        )}
+      </div>
+
+      {/*common settings*/}
+      <div>
+        <h4 style={{ ...styles.heading2, margin: '0 0 12px 0', fontSize: 16 }}>
+          After Submission Behavior
+        </h4>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10}}>
+          <label style={propertyStyles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={cartSettings.redirectAfterAdd}
+              onChange={(e) => setCartSettings({...cartSettings, redirectAfterAdd: e.target.checked})}
+            />
+            <span>Redirect to cart after adding</span>
+          </label>
+
+          <label style={propertyStyles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={cartSettings.showSuccessMessage}
+              onChange={(e) => setCartSettings({ ...cartSettings, showSuccessMessage: e.target.checked})}
+            />
+            <span>Show success message</span>
+          </label>
+
+          {cartSettings.showSuccessMessage && (
+            <input
+              type="text"
+              value={cartSettings.successMessage}
+              onChange={(e) => setCartSettings({ ...cartSettings, successMessage: e.target.value})}
+              style={{ ...propertyStyles.input, marginLeft: 24}}
+              placeholder="Success Message"
+            />
+          )}
+        </div>
+      </div>
+
+      {cartSettings.mode === "draft_order" && (
+        <div style={{
+          background: '#fff3cd',
+          border: '2px solid #ffc107',
+          borderRadius: 8,
+          padding: 16,
+          marginTop: 16
+        }}>
+          <h4 style={{ ...styles.heading2, margin: '0 0 12px 0', fontSize: 14, color: '#856404' }}>
+            ⚠️ Customer Information Required
+          </h4>
+          <p style={{ ...styles.smallText, margin: '0 0 12px 0', color: '#856404' }}>
+            For draft orders, you must collect customer email in your form. Add a text input element with ID <code>customerEmail</code>.
+          </p>
+          
+          <label style={propertyStyles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={cartSettings.requireCustomerInfo}
+              onChange={(e) => setCartSettings({
+                ...cartSettings, 
+                requireCustomerInfo: e.target.checked
+              })}
+            />
+            <span>Require customer name and phone (optional fields)</span>
+          </label>
+
+          {cartSettings.requireCustomerInfo && (
+            <p style={{ ...styles.smallText, marginLeft: 24, marginTop: 8, color: '#856404' }}>
+              Add text inputs with IDs: <code>customerFirstName</code>, <code>customerLastName</code>, <code>customerPhone</code>
+            </p>
+          )}
+        </div>
+      )}
+      
+      {/*=========addvanced settings toggle
+      <button
+        onClick={() => setShowAdvanced(!showAdvanced)}
+        style={{
+          width: '100%',
+          padding: 10,
+          background: 'white',
+          border: '1px solid #e5e7eb',
+          borderRadius: 6,
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          fontWeight: 500,
+          fontSize: 13,
+          color: '#374151'
+        }}
+      >
+        <span>⚙️ Advanced Options</span>
+        <span style={{ 
+          transform: showAdvanced ? 'rotate(180deg)' : 'rotate(0deg)',
+          transition: 'transform 0.2s'
+        }}>
+          ▼
+        </span>
+      </button>
+
+      {showAdvanced && (
+        <div style={{
+          padding: 12,
+          background: '#fefce8',
+          border: '1px solid #fde68a',
+          borderRadius: 6,
+          fontSize: 12,
+          color: '#854d0e'
+        }}      
+        >
+          <strong>Advanced settings:</strong>
+          <ul style={{ marginTop: 6, paddingLeft: 20, marginBottom: 0}}>
+            <li>Custom line item properties mapping</li>
+            <li>Metafield storage configuration</li>
+            <li>Webhook triggers on submission</li>
+            <li>Custom API endpoints</li>
+          </ul>
+        </div>
+      )}
+      
+      ----------*/}
+    
+    </div>
+  );
+}
+
+//===========existing product settings================
+function ExistingProductSettings({
+  settings,
+  setSettings,
+  products,
+  variants,
+  loadingProducts,
+  onLoadProducts,
+  onLoadVariants
+}) {
+
+const [showProductPicker, setShowProductPicker] = useState(false);
+  
+const selectedProduct = products.find(p => p.id === settings.baseProductId);
+ 
+return (
+  <div>
+    <h4 style={{ ...styles.heading2, margin: '0 0 12px 0', fontSize: 16 }}>
+      Product Configuration
+    </h4>
+
+    <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
+      <div>
+         <label style={propertyStyles.labelSmall}>Base Product</label>
+
+         {selectedProduct ? (
+          <div style={{
+            padding: 12,
+            background: 'white',
+            border: '1px solid #d1d5db',
+            borderRadius: 6,
+            display: 'flex',
+            gap: 12,
+            alignItems: 'center'
+          }}>
+            {selectedProduct.image ? (
+              <img
+                src={selectedProduct.image} 
+                  alt={selectedProduct.title}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    objectFit: 'cover',
+                    borderRadius: 4
+                  }}
+              />
+            ) : (
+              <div style={{
+                  width: 40,
+                  height: 40,
+                  background: '#f3f4f6',
+                  borderRadius: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 18
+                }}>
+                  📦
+                </div>
+            )}
+            <div style={{ flex: 1}}>
+              <div style={{ fontWeight: 500, fontSize: 13 }}>
+                {selectedProduct.title}
+              </div>
+              <div style={{ fontSize: 11, color: '#6b7280' }}>
+                ${selectedProduct.price}
+              </div>
+            </div>
+            <button onClick={() => setShowProductPicker(true)}
+              style={{
+                padding: '6px 12px',
+                background: 'white',
+                border: '1px solid #d1d5db',
+                borderRadius: 4,
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 500,
+                color: '#374151'
+              }}  
+            >
+              Change
+            </button>
+          </div>
+         ) : (
+          <button
+            onClick={() => {
+              if (!products.length){
+                onLoadProducts();
+              }
+              setShowProductPicker(true);
+            }}
+            disabled={loadingProducts}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              background: 'white',
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              cursor: loadingProducts ? 'wait' : 'pointer',
+              textAlign: 'left',
+              fontSize: 13,
+              color: '#6b7280'
+            }}
+          >
+              {loadingProducts ? 'Loading products...' : 'Select Product from Shopify'}
+            </button>
+         )}
+         <div style={{ ...styles.smallText, marginTop: 4 }}>
+            Choose the Shopify product to add to cart
+         </div>
+      </div>
+
+      {settings.baseProductId && variants.length > 0 && (
+        <div>
+          <label style={propertyStyles.labelSmall}>Product Vriant (optional)</label>
+          <select
+            value={settings.productVariantId}
+            onChange={(e) => setSettings({ ...settings, productVariantId:e.target.value})}
+            style={propertyStyles.input}
+          >
+            <option value="">Use default variant</option>
+            {variants.map(variant => (
+              <option key={variant.id} value={variant.is}>
+                {variant.title} - ${variant.price}
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+            Leave empty to use the first available variant
+          </div>
+        </div>
+      )}
+
+      <div style={{
+        padding: 12,
+        background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',  
+        border: '2px solid #6ee7b7',
+        borderRadius: 8,
+        boxShadow: '0 2px 4px rgba(16, 185, 129, 0.1)', 
+      }}>
+        <p style={{ ...styles.smallText, margin: 0, color: '#065f46' }}>
+          <strong>✓ How it works:</strong> Form data will be added as line item properties. 
+          The calculated price will be displayed but Shopify will use the product's configured price.
+        </p>
+      </div>
+    </div>
+
+    {/*price warning display*/}
+    <div style={{
+      background: '#fff3cd',
+      border: '1px solid #ffc107',
+      borderRadius: 6,
+      padding: 12,
+      marginTop: 12
+    }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'start' }}>
+        <span style={{ fontSize: 20 }}>💡</span>
+        <div>
+          <strong style={{ fontSize: 13, color: '#856404' }}>
+            Note: Calculated Price Limitation
+          </strong>
+          <p style={{ fontSize: 12, margin: '4px 0 0 0', color: '#856404' }}>
+            Shopify's cart API doesn't support custom pricing for existing products. 
+            Your calculated price will be shown in form but the cart will use the 
+            product's actual Shopify price. For custom pricing, use "Draft Order" mode instead.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    {/*product picker modal*/}
+    <ProductPickerModal
+        isOpen={showProductPicker}
+        onClose={() => setShowProductPicker(false)}
+        onSelect={(product) => {
+          setSettings({
+            ...settings, 
+            baseProductId: product.id,
+            productVariantId: ''
+          });
+          onLoadVariants(product.id);
+        }}
+        products={products}
+        loading={loadingProducts}
+      />
+  </div>
+);
+}
+
+//========dynamic variant settings===============
+function DynamicVariantSettings({ 
+  settings, 
+  setSettings, 
+  components,
+  products,
+  loadingProducts,
+  onLoadProducts,
+  onAddMapping,
+  onUpdateMapping,
+  onRemoveMapping
+}){
+  const [showProductPicker, setShowProductPicker] = useState(false);
+  const variantMapping = settings.variantMapping || [];
+  const interactiveElements = components.filter(c => 
+    ['dropdown', 'radio', 'image_selector', 'text_input'].includes(c.type)
+  );
+
+  
+  const selectedProduct = products.find(p => p.id === settings.baseProductId);
+
+  return (
+    <div>
+      <h4 style={{ ...styles.heading2, margin: '0 0 12px 0', fontSize: 16 }}>
+      </h4>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <div>
+          <label style={propertyStyles.labelSmall}>Base Product</label>
+
+          {selectedProduct ? (
+            <div style={{
+              padding: 12,
+              background: 'white',
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              display: 'flex',
+              gap: 12,
+              alignItems: 'center'
+            }}>
+              {selectedProduct.image ? (
+                <img 
+                  src={selectedProduct.image} 
+                  alt={selectedProduct.title}
+                  style={{
+                    width: 40,
+                    height: 40,
+                    objectFit: 'cover',
+                    borderRadius: 4
+                  }}
+                />
+              ) : (
+                <div style={{
+                  width: 40,
+                  height: 40,
+                  background: '#f3f4f6',
+                  borderRadius: 4,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontSize: 18
+                }}>
+                  📦
+                </div>
+              )}
+              <div style ={{flex: 1}}>
+                <div style={{ fontWeight: 500, fontSize: 13}}>
+                  {selectedProduct.title}
+                </div>
+              </div>
+              <button 
+                onClick={() => setShowProductPicker(true)}
+                style={{
+                  padding: '6px 12px',
+                  background: 'white',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 4,
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 500,
+                  color: '#374151'
+                }}
+              >
+                Change
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => {
+                if (!products.length){
+                  onLoadProducts();
+                }
+                setShowProductPicker(true);
+              }}
+              disabled={loadingProducts}
+              style={{
+                width: '100%',
+                padding: '10px 12px',
+                background: 'white',
+                border: '1px solid #d1d5db',
+                borderRadius: 6,
+                cursor: loadingProducts ? 'wait' : 'pointer',
+                textAlign: 'left',
+                fontSize: 13,
+                color: '#6b7280'
+              }}
+            >
+             {loadingProducts ? 'Loading products...' : 'Select Product from Shopify'}
+            </button>
+          )}
+          <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+            New variants will be created under this product
+          </div>
+        </div>
+
+        <div>
+          <label style={{ ...propertyStyles.labelSmall, marginBottom: 6 }}>
+            Variant Options Mapping (max 3)
+          </label>
+
+          {variantMapping.length === 0 ? (
+            <div style={{
+              padding: 12,
+              background: 'white',
+              border: '1px dashed #d1d5db',
+              borderRadius: 6,
+              textAlign: 'center',
+              color: '#9ca3af',
+              fontSize: 12
+            }}>
+              No mappings yet. Click "Add Option" to start.
+            </div>
+          ) : (
+            variantMapping.map((mapping, idx) => (
+              <div key={idx} style={{ 
+                display: 'grid', 
+                gridTemplateColumns: '1fr 1fr 36px', 
+                gap: 6, 
+                marginBottom: 6,
+                padding: 8,
+                background: 'white',
+                borderRadius: 6,
+                border: '1px solid #e5e7eb'
+              }}>
+                <select
+                  value={mapping.elementId}
+                  onChange={(e) => onUpdateMapping(idx, 'elementId', e.target.value)}
+                  style={propertyStyles.inputSmall}
+                >
+                  <option value="">Select element</option>
+                  {interactiveElements.map(el => (
+                    <option key={el.id} value={el.id}>{el.label}</option>
+                  ))}
+                </select>
+
+                <input
+                  type="text"
+                  value={mapping.optionName}
+                  onChange={(e) => onUpdateMapping(idx, 'optionName', e.target.value)}
+                  placeholder="Option name"
+                  style={propertyStyles.inputSmall}
+                />
+
+                  <button onClick={() => onRemoveMapping}
+                    style={{
+                      background: '#fee2e2',
+                      border: 'none',
+                      borderRadius: 4,
+                      cursor: 'pointer',
+                      fontSize: 14,
+                      color: '#991b1b',
+                      padding: 0
+                    }}  
+                    title="Remove"
+                  >
+                    🗑️
+                  </button>
+              </div>
+            ))
+          )}
+
+          {/*inventory settings*/}
+          <div style={{ marginTop: 16 }}>
+            <h4 style={{ ...styles.heading2, fontSize: 14, margin: '0 0 12px 0' }}>
+              📦 Inventory Settings
+            </h4>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <label style={propertyStyles.checkboxLabel}>
+                <input
+                  type="checkbox"
+                  checked={settings.trackInventory}
+                  onChange={(e) => setSettings({
+                    ...settings,
+                    trackInventory: e.target.checked
+                  })}
+                />
+                <span>Track inventory for created variants</span>
+              </label>
+
+              {settings.trackInventory && (
+                <>
+                  <div>
+                    <label style={propertyStyles.label}>Default Inventory Quantity</label>
+                    <input
+                      type="number"
+                      value={settings.defaultInventoryQty || 100}
+                      onChange={(e) => setSettings({
+                        ...settings,
+                        defaultInventoryQty: parseInt(e.target.value) || 0
+                      })}
+                      style={propertyStyles.input}
+                      min="0"
+                    />
+                    <small style={styles.smallText}>
+                      Initial stock for newly created variants
+                    </small>
+                  </div>
+
+                  <div>
+                    <label style={propertyStyles.label}>When out of stock</label>
+                    <select
+                      value={settings.inventoryPolicy || "deny"}
+                      onChange={(e) => setSettings({
+                        ...settings,
+                        inventoryPolicy: e.target.value
+                      })}
+                      style={propertyStyles.input}
+                    >
+                      <option value="deny">Don't allow purchases</option>
+                      <option value="continue">Allow purchases (oversell)</option>
+                    </select>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+
+          {variantMapping.length < 3 && (
+            <button
+              onClick={onAddMapping}
+              style={{
+                width: '100%',
+                padding: 8,
+                background: 'white',
+                border: '1px dashed #3b82f6',
+                borderRadius: 4,
+                color: '#3b82f6',
+                cursor: 'pointer',
+                fontSize: 12,
+                fontWeight: 500,
+                marginTop: 6
+              }}
+            >
+              + Add option
+            </button>
+          )}
+        </div>
+
+        <div>
+          <label style={propertyStyles.checkboxLabel}>
+            <input
+              type="checkbox"
+              checked={settings.generateSKU}
+              onChange={(e) => setSettings({ ...settings, generateSKU: e.target.checked})}
+            />
+            <span>Auto-generate SKU</span>
+          </label>
+
+          {settings.generateSKU && (
+            <input
+              type="text"
+              value={settings.skuPrefix}
+              onChange={(e) => setSettings({...settings, skuPrefix: e.target.value})}
+              placeholder="SKU Prefix"
+              style={{ ...propertyStyles.input, marginTop: 8, marginLeft: 24 }}
+            />
+          )}
+        </div>
+
+        <div style={{
+          padding: 12,
+          background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+          border: '2px solid #6ee7b7', 
+          borderRadius: 8,
+          boxShadow: '0 2px 4px rgba(16, 185, 129, 0.1)',  
+        }}>
+          <p style={{ ...styles.smallText, margin: 0, color: '#065f46' }}>
+            <strong>⚡ Example:</strong> If customer selects "Large" for Size element, a new variant 
+             "Large" will be created with the calculated price from your form.
+        
+          </p>
+          </div>
+      </div>
+
+      <ProductPickerModal
+        isOpen={showProductPicker}
+        onClose={() => setShowProductPicker(false)}
+        onSelect={(product) => {
+          setSettings({
+            ...settings, 
+            baseProductId: product.id
+          });
+        }}
+        products={products}
+        loading={loadingProducts}
+      />
+    </div>
+  )
+
+  
+}
+
+//=============draft order setting==================
+function DraftOrderSettings({settings, setSettings}){
+  return (
+    <div>
+      <h4 style={{ ...styles.heading2, margin: '0 0 12px 0', fontSize: 16 }}>
+        Draft Order Configuration
+      </h4>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <label style={propertyStyles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={settings.requiresApproval}
+            onChange={(e) => setSettings({...settings, requiresApproval: e.target.checked})}
+          />
+          <span>Require admin approval</span>
+        </label>
+
+        <label style={propertyStyles.checkboxLabel}>
+          <input
+            type="checkbox"
+            checked={settings.sendEmail}
+            onChange={(e) => setSettings({...settings, sendEmail: e.target.checked})}
+          />
+          <span>Send email notification to customer</span>
+        </label>
+
+        {settings.sendEmail && (
+          <>
+            <div>
+              <label style={propertyStyles.labelSmall}>Email Subject Line</label>
+              <input
+                type="text"
+                value={settings.emailSubject}
+                onChange={(e) => setSettings({...settings, emailSubject: e.target.value})}
+                style={propertyStyles.input}
+                placeholder="Your Custom Quote is Ready"
+              />
+            </div>
+
+            <div>
+               <label style={propertyStyles.labelSmall}>Order Note Template</label>
+                <textarea
+                  value={settings.orderNoteTemplate}
+                  onChange={(e) => setSettings({...settings, orderNoteTemplate: e.target.value})}
+                  rows={6}
+                  style={{
+                    ...propertyStyles.input,
+                    fontFamily: 'Monaco, monospace',
+                    fontSize: 12,
+                    resize: 'vertical'
+                  }}
+                  placeholder="Custom form submission&#10;&#10;Configuration:&#10;{{form_data}}&#10;&#10;Total: {{calculated_price}}"
+                />
+                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+                  Use for dynamic content
+                </div>
+            </div>
+          </>
+        )}
+
+        <div style={{
+          padding: 12,
+          background: 'linear-gradient(135deg, #ecfdf5 0%, #d1fae5 100%)',
+          border: '2px solid #6ee7b7', 
+          borderRadius: 8,
+          boxShadow: '0 2px 4px rgba(16, 185, 129, 0.1)',  
+        }}>
+          <p style={{ ...styles.smallText, margin: 0, color: '#065f46' }}>
+            <strong>📋 How it works:</strong> A draft order will be created in Shopify admin. 
+            Customer receives an invoice link to complete payment. Perfect for B2B or custom quotes.
+        
+          </p>
+          </div>
+      </div>
+    </div>
+  );
+}
+
+//===product picker modal====
+ 
+function ProductPickerModal({ isOpen, onClose, onSelect, products, loading }) {
+  const [search, setSearch] = useState('');
+  const [selectedProduct, setSelectedProduct] = useState(null);
+
+  if (!isOpen) return null;
+
+  const filteredProducts = products.filter(p => 
+    p.title.toLowerCase().includes(search.toLowerCase())
+  );
+
+  return (
+    <div style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      background: 'rgba(0,0,0,0.5)',
+      zIndex: 9999,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: 20
+    }}
+    onClick={onClose}
+    >
+      <div style={{
+        background: 'white',
+        borderRadius: 12,
+        width: '100%',
+        maxWidth: 600,
+        maxHeight: '80vh',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden'
+      }}
+      onClick={(e) => e.stopPropagation()}
+      >
+        {/*header*/}
+        <div style={{
+          padding: 20,
+          borderBottom: '1px solid #e5e7eb',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center'
+        }}>
+          <h2 style={{ margin: 0, fontSize: 18, fontWeight: 600 }}>
+            Select Product
+          </h2>
+          <button
+            onClick={onClose}
+            style={{
+              background: 'transparent',
+              border: 'none',
+              fontSize: 24,
+              cursor: 'pointer',
+              color: '#6b7280',
+              padding: 0,
+              lineHeight: 1
+            }}
+          >
+            x
+          </button>
+        </div>
+
+        {/*search*/}
+        <div style={{ padding: 16, borderBottom: '1px solid #e5e7eb'}}>
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search Products"
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              fontSize: 14,
+              outline: 'none'
+            }}
+            autoFocus
+          />
+        </div>
+
+        {/*products list*/}
+        <div style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: 16
+        }}>
+          {loading ? (
+            <div style={{ textAlign: 'center', padding: 40, color: '#9ca3af' }}>
+              Loading products...
+            </div>
+          ): filteredProducts.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: 40, color: '#9ca3af' }}>
+              No products found
+            </div>
+          ) : (
+            <div style={{display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {filteredProducts.map(product => (
+                <button
+                  key={product.id}
+                  onClick={() => setSelectedProduct(product)}
+                  style={{
+                    padding: 12,
+                    border: selectedProduct?.id === product.id ? '2px solid #3b82f6' : '1px solid #e5e7eb',
+                    borderRadius: 6,
+                    background: selectedProduct?.id === product.id ? '#eff6ff' : 'white',
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    display: 'flex',
+                    gap: 12,
+                    alignItems: 'center'
+                  }}
+                >
+                  {product.image ? (
+                    <img
+                      src={product.image}
+                      alt={product.title}
+                      style={{
+                        width: 48,
+                        height: 48,
+                        objectFit: 'cover',
+                        borderRadius: 4,
+                        border: '1px solid #e5e7eb'
+                      }}
+                    />
+                  ) : (
+                    <div style={{
+                      width: 48,
+                      height: 48,
+                      background: '#f3f4f6',
+                      borderRadius: 4,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 20
+                    }}>
+                      📦
+                    </div>
+                  )}
+                  <div style={{ flex: 1}}>
+                    <div style={{ fontWeight: 500, fontSize: 14, color: '#111827' }}>
+                      {product.title}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                      ${product.price}
+                    </div>
+                  </div>
+                  {selectedProduct?.id === product.id && (
+                    <span style={{ color: '#10b981', fontSize: 18 }}>✓</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/*footer*/}
+        <div style={{
+          padding: 16,
+          borderTop: '1px solid #e5e7eb',
+          display: 'flex',
+          gap: 12,
+          justifyContent: 'flex-end'
+        }}>
+          <button
+            onClick={onClose}
+            style={{
+              padding: '10px 20px',
+              border: '1px solid #d1d5db',
+              borderRadius: 6,
+              background: 'white',
+              cursor: 'pointer',
+              fontSize: 14,
+              fontWeight: 500
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            onClick={()=>{
+              if (selectedProduct) {
+                onSelect(selectedProduct);
+                onClose();
+              }
+            }}
+            disabled={!selectedProduct}
+            style={{
+              padding: '10px 20px',
+              border: 'none',
+              borderRadius: 6,
+              background: selectedProduct ? '#3b82f6' : '#d1d5db',
+              color: 'white',
+              cursor: selectedProduct ? 'pointer' : 'not-allowed',
+              fontSize: 14,
+              fontWeight: 500
+            }}
+          >
+            Select Product
+          </button>
+
+        </div>
+      </div>
+
+    </div>
+  )
+}
+
 // ==================== styles ====================
 const styles = {
   container: {
@@ -4705,50 +7023,59 @@ const styles = {
     bottom: 0,
     display: "flex",
     flexDirection: "column",
-    background: "#f9f1fb",
+    background: "linear-gradient(135deg, #e0f2fe 0%, #fef3c7 100%)",
     fontFamily: "system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial",
   },
 
   topBar: {
-    background: "#fff",
-    borderBottom: "1px solid #e5e7eb",
+    background: "linear-gradient(90deg, #ffffff 0%, #f0f9ff 100%)",
+    borderBottom: "2px solid #60a5fa",
+    boxShadow: "0 2px 8px rgba(96, 165, 250, 0.1)",  // 
     display: "flex",
     justifyContent: "space-between",
     alignItems: "center",
-    padding: "12px 16px",
+    padding: "14px 20px",  
   },
 
   backBtn: {
-    background: "transparent",
-    border: "none",
+    background: "linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)",  // 💙 Blue gradient
+    border: "2px solid #60a5fa",
+    borderRadius: 8,
+    padding: "8px 14px",
     cursor: "pointer",
     fontSize: 14,
-  },
-
-  formNameInput: {
-    padding: "8px 12px",
-    border: "1px solid #e5e7eb",
-    borderRadius: 6,
-    fontSize: 14,
-    outline: "none",
+    fontWeight: 600,
+    color: "#1e40af",
+    transition: "all 0.2s ease",
+    boxShadow: "0 2px 4px rgba(96, 165, 250, 0.2)",
   },
 
   smallBtn: {
-    padding: "6px 10px",
-    borderRadius: 6,
-    border: "1px solid #e5e7eb",
+    padding: "8px 14px",
+    borderRadius: 8,
+    border: "2px solid #bfdbfe",
     cursor: "pointer",
-    background: "#fff",
+    background: "linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%)",
+    color: "#1e40af",
+    fontWeight: 600,
+    fontSize: 14,
+    transition: "all 0.2s ease",
+    boxShadow: "0 2px 4px rgba(96, 165, 250, 0.15)",
   },
 
   primaryBtn: {
-    padding: "6px 10px",
-    borderRadius: 6,
+    padding: "8px 16px",
+    borderRadius: 8,
     border: "none",
     cursor: "pointer",
-    background: "#0ea5a4",
+    background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",  // 🎨 Vibrant blue
     color: "#fff",
+    fontWeight: 700,  // 💪 Bold!
+    fontSize: 14,
+    transition: "all 0.2s ease",
+    boxShadow: "0 4px 8px rgba(59, 130, 246, 0.3)",  // ✨ Glow effect
   },
+
 
   editorContainer: {
     display: "flex",
@@ -4758,56 +7085,76 @@ const styles = {
   },
 
   canvasArea: {
-    flex: 3,
+    flex: 4.5,  
     display: "flex",
     flexDirection: "column",
-    overflow: "hidden",
+    overflow: "auto", //allow scrolling
+    overflowX: "hidden", //alow only vertical scroll
     marginRight: 16,
-    padding: 16,
+    padding: 20,
+    background: "rgba(255, 255, 255, 0.5)",
+    borderRadius: 12,
+    boxShadow: "0 4px 16px rgba(96, 165, 250, 0.1)",
+    scrollBehavior: "smooth",
   },
 
   canvasScrollableContent: {
-    flex: 1,
+    flex: "1 1 auto",
+    minHeight: "400px",  
+    maxHeight: "calc(100% - 270px)",
     overflowY: "auto",
     overflowX: "hidden",
-    padding: 12,
-    background: "#ffffff",
-    borderRadius: 8,
-    border: "1px solid #e5e7eb",
-    marginBottom: 12,
+    padding: 20,
+    background: "linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%)", 
+    borderRadius: 12,
+    border: "2px solid #bfdbfe", 
+    marginBottom: 16,
+    boxShadow: "0 2px 8px rgba(96, 165, 250, 0.1)",
   },
 
   canvasSectionTabsContainer: {
+  
     flex: "0 0 auto",
-    borderTop: "1px solid #e5e7eb",
-    background: "#ffffff",
-    borderRadius: 8,
-    maxHeight: "200px",
-    minHeight: "150px",
+    borderTop: "2px solid #bfdbfe",  
+    background: "linear-gradient(135deg, #ffffff 0%, #fef3c7 50%, #f0f9ff 100%)",  
+    borderRadius: 12,
+    maxHeight: "350px", 
+    minHeight: "250px",
     overflowY: "auto",
+    boxShadow: "0 -2px 8px rgba(96, 165, 250, 0.1)", 
   },
 
+  
   dropZonePlaceholder: {
     display: "flex",
     flexDirection: "column",
     alignItems: "center",
     justifyContent: "center",
-    padding: 40,
+    padding: 60,
     minHeight: 500,
+    background: "linear-gradient(135deg, #dbeafe 0%, #fef3c7 100%)", 
+    borderRadius: 16,
+    border: "3px dashed #60a5fa",  
+    boxShadow: "inset 0 2px 8px rgba(96, 165, 250, 0.1)",
   },
 
+    
   componentWrapper: {
-    padding: 12,
-    background: "#fff",
-    borderRadius: 8,
-    border: "1px solid #e5e7eb",
+    padding: 16,
+    background: "linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%)",
+    borderRadius: 12,
+    border: "2px solid #bfdbfe",
     position: "relative",
-    marginBottom: 8,
+    marginBottom: 12,
+    transition: "all 0.2s ease",
+    boxShadow: "0 2px 6px rgba(96, 165, 250, 0.1)",
   },
 
   componentWrapperSelected: {
-    boxShadow: "0 4px 12px rgba(15,23,42,0.06)",
+    background: "linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)",  
+    boxShadow: "0 6px 16px rgba(59, 130, 246, 0.2)",
     borderColor: "#3b82f6",
+    transform: "translateY(-2px)",  
   },
 
   componentActions: {
@@ -4886,30 +7233,41 @@ const styles = {
     userSelect: "none",
   },
 
+    
   sidebar: {
-    width: 360,
-    borderLeft: "1px solid #e5e7eb",
-    padding: 12,
-    background: "#f8fafc",
+    width: 300,  
+    borderLeft: "2px solid #bfdbfe",  
+    padding: 16,
+    background: "linear-gradient(180deg, #fef3c7 0%, #f0f9ff 100%)", 
+    boxShadow: "-4px 0 12px rgba(96, 165, 250, 0.1)",
+  },
+
+  tabButton: {
+    padding: "10px 14px",
+    borderRadius: 8,
+    background: "#ffffff",
+    border: "2px solid #bfdbfe",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#1e40af",
+    transition: "all 0.2s ease",
+    boxShadow: "0 2px 4px rgba(96, 165, 250, 0.1)",
+  },
+
+  tabButtonActive: {
+    background: "linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)",
+    borderColor: "#2563eb",
+    color: "#ffffff",  // 💪 White text
+    fontWeight: 700,
+    transform: "translateY(-2px)",  // 🎯 Lift effect
+    boxShadow: "0 4px 8px rgba(59, 130, 246, 0.3)",
   },
 
   sidebarTabs: {
     display: "flex",
     gap: 8,
     marginBottom: 12,
-  },
-
-  tabButton: {
-    padding: "8px 10px",
-    borderRadius: 6,
-    background: "#fff",
-    border: "1px solid #e5e7eb",
-    cursor: "pointer",
-  },
-
-  tabButtonActive: {
-    background: "#eef2ff",
-    borderColor: "#c7d2fe",
   },
 
   tabButtonDisabled: {
@@ -4921,50 +7279,103 @@ const styles = {
     height: "calc(100% - 56px)",
     overflowY: "auto",
   },
+
+  
+  heading1: {
+    fontSize: "24px",
+    fontWeight: 700,
+    color: "#1e40af",
+    marginBottom: "12px",
+    letterSpacing: "0.5px",
+  },
+
+  heading2: {
+    fontSize: "18px",
+    fontWeight: 600,
+    color: "#1e40af",
+    marginBottom: "10px",
+  },
+
+  bodyText: {
+    fontSize: "14px",
+    fontWeight: 400,
+    color: "#1e3a8a",
+    lineHeight: "1.6",
+  },
+
+  smallText: {
+    fontSize: "12px",
+    fontWeight: 400,
+    color: "#475569",
+    lineHeight: "1.5"
+  },
+
+  scrollHint: {
+    position: "sticky",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: "30px",
+    background: "linear-gradient(to top, rgba(96, 165, 250, 0.1), transparent)",
+    pointerEvents: "none",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: "12px",
+    color: "#60a5fa",
+    fontWeight: 600,
+  },
 };
 
 // ==================== PROPERTY STYLES ====================
+
 const propertyStyles = {
   sectionWhite: {
-    padding: 12,
-    background: "#ffffff",
-    borderBottom: "1px solid #e5e7eb",
-    marginBottom: 8,
-    borderRadius: 6,
+    padding: 16,
+    background: "linear-gradient(135deg, #ffffff 0%, #f0f9ff 100%)",  
+    borderBottom: "2px solid #bfdbfe",
+    marginBottom: 12,
+    borderRadius: 10,
+    boxShadow: "0 2px 4px rgba(96, 165, 250, 0.05)",
   },
 
   sectionBlue: {
-    padding: 12,
-    background: "#eff6ff",
-    borderBottom: "1px solid #e5e7eb",
-    marginBottom: 8,
-    borderRadius: 6,
+    padding: 16,
+    background: "linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%)",  
+    borderBottom: "2px solid #60a5fa",
+    marginBottom: 12,
+    borderRadius: 10,
+    boxShadow: "0 2px 4px rgba(96, 165, 250, 0.15)",
   },
 
   label: {
     display: "block",
     marginBottom: 8,
-    fontSize: 13,
-    fontWeight: 600,
-    color: "#374151",
+    fontSize: 14,  
+    fontWeight: 700,  
+    color: "#1e40af",  
+    letterSpacing: "0.3px", 
   },
 
   labelSmall: {
     display: "block",
     marginBottom: 6,
-    fontSize: 12,
-    fontWeight: 500,
-    color: "#374151",
+    fontSize: 13,
+    fontWeight: 600,
+    color: "#1e40af",
   },
 
   input: {
     width: "100%",
-    padding: "8px 12px",
-    border: "1px solid #e5e7eb",
-    borderRadius: 6,
-    fontSize: 13,
+    padding: "10px 14px",
+    border: "2px solid #bfdbfe",
+    borderRadius: 8,
+    fontSize: 14,
     outline: "none",
     boxSizing: "border-box",
+    background: "#ffffff",
+    transition: "all 0.2s ease",
+    fontWeight: 500,
   },
 
   inputSmall: {
@@ -4976,6 +7387,17 @@ const propertyStyles = {
     outline: "none",
     boxSizing: "border-box",
     margin: 0,
+  },
+
+    
+  inputFocus: {
+    borderColor: "#3b82f6",  
+    boxShadow: "0 0 0 3px rgba(59, 130, 246, 0.1)"
+  },
+
+  buttonHover: {
+    transform: "translateY(-2px)",  
+    boxShadow: "0 6px 12px rgba(59, 130, 246, 0.2)",
   },
 
   checkboxLabel: {

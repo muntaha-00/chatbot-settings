@@ -101,6 +101,10 @@ model Form {
   // Calculator-specific settings (for calculator functionality)
   calculatorSettings   String?          // Stores calculator-specific configuration as JSON
   
+  //stores cart behavior config as JSON
+  cartSettings         String?
+
+
   fields               FormField[]
   submissions          FormSubmission[]
   calculatorResults    CalculatorResult[]

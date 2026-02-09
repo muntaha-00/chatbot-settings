@@ -6,6 +6,10 @@ import { json } from "../utils/response";
 import { CalculatorEngine } from "../utils/calculator";
 
 
+
+
+
+
 // ==================== LOADER ====================
 //fetch form data when preview page loads
 //same as edit file loader
@@ -251,6 +255,113 @@ export default function FormBuilderPreview(){
     };
   });
 
+  //load cart settings 
+  const [cartSettings] = useState(() => {
+  if (form?.cartSettings) {
+    return safeJSONParse(form.cartSettings, {
+      mode: "existing_product",
+      redirectAfterAdd: true,
+      showSuccessMessage: true,
+      successMessage: "Added to cart!",
+      baseProductId: "",
+      productVariantId: "",
+      variantMapping: [],
+      generateSKU: true,
+      skuPrefix: "CUSTOM-",
+      requiresApproval: false,
+      sendEmail: true,
+      emailSubject: "Your Custom Quote is Ready",
+      orderNoteTemplate: "Custom form submission"
+    });
+  }
+
+   return {
+    mode: "existing_product",
+    redirectAfterAdd: true,
+    showSuccessMessage: true,
+    successMessage: "Added to cart!",
+  };
+
+  });
+
+  //cart submission state
+  const [isAddingToCart, setIsAddingToCart] = useState(false);
+  const [cartError, setCartError] = useState(null);
+  const [cartSuccess, setCartSuccess] = useState(false);
+  const [cartProgress, setCartProgress] = useState("");
+  
+
+  // Toast notification function (Step 3.1)
+  const showToastNotification = (message, type = 'success') => {
+    // Check if we're in the browser (not server-side rendering)
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  
+  const toast = document.createElement('div');  //Only runs in browser
+    toast.style.cssText = `
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      padding: 16px 24px;
+      background: ${type === 'success' ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)' : 'linear-gradient(135deg, #ef4444 0%, #dc2626 100%)'};
+      color: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+      z-index: 10000;
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 14px;
+      font-weight: 500;
+      animation: slideIn 0.3s ease-out;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      max-width: 400px;
+    `;
+    
+    // Add icon
+    const icon = document.createElement('span');
+    icon.style.fontSize = '24px';
+    icon.textContent = type === 'success' ? '✅' : '❌';
+    toast.appendChild(icon);
+    
+    // Add message
+    const textDiv = document.createElement('div');
+    textDiv.innerHTML = `
+      <div style="font-weight: 700; font-size: 16px; margin-bottom: 2px;">
+        ${type === 'success' ? 'Success!' : 'Error'}
+      </div>
+      <div style="font-size: 13px; opacity: 0.95;">
+        ${message}
+      </div>
+    `;
+    toast.appendChild(textDiv);
+    
+    // Add CSS animation
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+      }
+    `;
+    if (!document.querySelector('#toast-animation-styles')) {
+      style.id = 'toast-animation-styles';
+      document.head.appendChild(style);
+    }
+    
+    document.body.appendChild(toast);
+    
+    // Remove after 3 seconds
+    setTimeout(() => {
+      toast.style.animation = 'slideOut 0.3s ease-out';
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
+  };
+
+
   //initialize calculator
   //create calculator instance for real-time calculations
   //useMemo prevents recreating on every render
@@ -271,27 +382,519 @@ export default function FormBuilderPreview(){
   //store current calculated total price
   //number updated on every form value change
 
+  const prevFormValuesRef = useRef({});
   //auto-calculate on change
   //recalculation price whenever user changes any input
 
+  //logs wgenever formValues change
+  useEffect(() => {
+    console.log("=== FORM VALUES UPDATED ===");
+    console.log(JSON.stringify(formValues, null, 2));
+  }, [formValues]);
+
   useEffect(()=> {
+    console.log("Form Values Changed:", formValues);
     const price = calculator.calculateFinalPrice(formValues);
+    console.log("Calculated Price:", price);
     setCalculatedPrice(price);
   }, [formValues, calculator]);
   //useEffect runs when formValues or calculator changes
   //keeps calculatedPrice in sync with input
 
-  ///========handlers===================
-  const handleValueChange = (elementId, value) => {
+  // Initialize default values for number inputs on component mount
+  useEffect(() => {
+    if (components && components.length > 0) {
+      const initialValues = {};
+      let hasDefaults = false;
+      
+      components.forEach(component => {
+        // Set default values for number inputs
+        if (component.type === 'number_input' && component.settings?.defaultValue) {
+          initialValues[component.id] = parseFloat(component.settings.defaultValue) || 0;
+          hasDefaults = true;
+          console.log(`Setting default value for ${component.id}:`, initialValues[component.id]);
+        }
+      });
+      
+      // Only update if we have default values to set
+      if (hasDefaults) {
+        setFormValues(prev => ({
+          ...prev,
+          ...initialValues
+        }));
+        console.log("Initialized default values:", initialValues);
+      }
+    }
+  }, [components]); // Run when components load
+
+  // Inject CSS animations on client-side only (prevents SSR errors)
+  useEffect(() => {
+    if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+      const style = document.createElement('style');
+      style.id = 'form-animations';
+      style.textContent = `
+        @keyframes slideIn {
+          from {
+            transform: translateX(100%);
+            opacity: 0;
+          }
+          to {
+            transform: translateX(0);
+            opacity: 1;
+          }
+        }
+      `;
+      if (!document.querySelector('#form-animations')) {
+        document.head.appendChild(style);
+      }
+    }
+  }, []); // Run once on mount
+
+  //auto-calculate formula-based data lookup inputs
+  useEffect(() => {
+  let hasChanges = false;
+  const updates = {};
+
+  components.forEach((component) => {
+    if (component.type === 'data_lookup') {
+      const settings = component.settings || {};
+      
+      // Calculate input 1 if formula-based
+      if (settings.input1Formula && settings.input1FormulaText) {
+        try {
+          const result = calculator.evaluateFormula(settings.input1FormulaText, formValues);
+          const roundedResult = parseFloat(result.toFixed(settings.input1MaxDecimal || 0));
+          const currentValue = formValues[`${component.id}_input1`];
+          const prevValue = prevFormValuesRef.current[`${component.id}_input1`];
+
+          //only update if value changed(prevents infinite loop)
+          if (currentValue !== roundedResult && prevValue !== roundedResult) {
+            updates[`${component.id}_input1`] = roundedResult;
+            hasChanges = true;
+          }
+        } catch (error) {
+          console.error('Error calculating input1 formula:', error);
+        }
+      }
+
+      //calculate input 2 if formula-based
+      if (settings.input2Formula && settings.input2FormulaText) {
+        try {
+          const result = calculator.evaluateFormula(settings.input2FormulaText, formValues);
+          const roundedResult = parseFloat(result.toFixed(settings.input2MaxDecimal || 0));
+          const currentValue = formValues[`${component.id}_input2`];
+          const prevValue = prevFormValuesRef.current[`${component.id}_input2`];
+
+          //only update if value changed(prevents infinite loop)
+          if (currentValue !== roundedResult && prevValue !== roundedResult) {
+            updates[`${component.id}_input2`] = roundedResult;
+            hasChanges = true;
+          }
+        } catch (error) {
+          console.error('Error calculating input2 formula:', error);
+        }
+      }
+    }
+  });
+
+  //apply all updates at once if there are any changes
+ if (hasChanges) {
+    prevFormValuesRef.current = { ...prevFormValuesRef.current, ...updates };
     setFormValues(prev => ({
       ...prev,
-      [elementId]: value
+      ...updates
     }));
+  }
+}, [formValues, calculator, components]);
 
-    //update single form value
-    //spread previus values, update changed field
-    //useEffect above to recalculate
+//auto calculate calculation_display values
+useEffect(() => {
+  const updates = {};
+  let hasUpdates = false;
+
+  components.forEach((component) => {
+    if (component.type === 'calculation_display') {
+      const calcValue = getCalculatedValue(component);
+      const currentValue = formValues[component.id];
+      
+      // Only update if value changed
+      if (calcValue !== currentValue) {
+        updates[component.id] = calcValue;
+        hasUpdates = true;
+      }
+    }
+  });
+
+  if (hasUpdates) {
+    setFormValues(prev => ({ ...prev, ...updates }));
+  }
+}, [formValues, components]);
+
+useEffect(() => {
+  console.log("=== CONDITIONAL DISPLAY DEBUG ===");
+  components.forEach((comp, idx) => {
+    if (comp.conditionalDisplay?.enabled) {
+      console.log(`Element ${idx + 1} (${comp.label}):`, {
+        triggerElementId: comp.conditionalDisplay.triggerElementId,
+        operator: comp.conditionalDisplay.operator,
+        compareValue: comp.conditionalDisplay.value,
+        actualValue: formValues[comp.conditionalDisplay.triggerElementId],
+        isVisible: isElementVisible(comp)
+      });
+    }
+  });
+}, [formValues, components]);
+
+
+  ///========handlers===================
+  const handleValueChange = (elementId, value) => {
+    console.log("=== VALUE CHANGE ===");
+    console.log("Element ID:", elementId);
+    console.log("New Value:", value);
+    console.log("Value Type:", typeof value);
+
+    setFormValues(prev => {
+      const updated = {
+        ...prev,
+        [elementId]: value
+      };
+      console.log("Updated formValues:", updated);
+      return updated;
+    });
   };
+
+  const handleAddToCart = async () => {
+    setIsAddingToCart(true);
+    setCartError(null);
+    setCartSuccess(false);
+
+
+    try {
+
+      setCartProgress("Preparing order...");
+  
+      //get calculated values
+      const quantity = calculator.getCartQuantity(formValues);
+      const price = calculatedPrice;
+      
+      setCartProgress("Processing...");
+
+      console.log("=== CART SUBMISSION DEBUG ===");
+      console.log("Mode:", cartSettings.mode);
+      console.log("Quantity:", quantity);
+      console.log("Price:", price);
+      console.log("Form Values:", formValues);
+
+      //prepare line item properties(form data)
+      const lineItemProperties = Object.entries(formValues).map(([key, value]) => {
+        const component = components.find(c => c.id === key || key.startsWith(c.id));
+        const label = component?.label || key;
+        return {
+          key: label,
+          value: String(value)
+        };
+      });
+
+      //add calculation breakdown
+      lineItemProperties.push({
+        key: "Calculated Price",
+        value: calculator.formatPrice(price)
+      });
+
+      //handle different cart modes
+      switch (cartSettings.mode) {
+        case "existing_product":
+          setCartProgress("Adding to cart...");
+          await handleExistingProductCart(quantity, price, lineItemProperties);
+          break;
+
+        case "dynamic_variant":
+          setCartProgress("Creating custom variant...");
+          await handleDynamicVariantCart(quantity, price, lineItemProperties);
+          break;
+
+        case "draft_order":
+          setCartProgress("Creating quote...");
+          await handleDraftOrderCart(quantity, price, lineItemProperties);
+          break;
+
+        default:
+          throw new Error("Invalid cart mode");
+      }
+
+      setCartProgress("Success! ✓");
+
+      //success handling
+      setCartSuccess(true);
+
+      if (cartSettings.showSuccessMessage) {
+        showToastNotification(
+          cartSettings.successMessage || 'Added to cart',
+          'success'
+        );
+      }
+
+      // Redirect if enabled
+      if (cartSettings.redirectAfterAdd) {
+        // Small delay to show success message
+        setTimeout(() => {
+          window.location.href = "/cart";
+        }, cartSettings.showSuccessMessage ? 1500 : 0);
+      }
+
+    } catch (error) {
+      console.error("Cart submission error:", error);
+      setCartError(error.message);
+      showToastNotification(error.message, 'error');
+    } finally {
+      setIsAddingToCart(false);
+    }
+  };
+
+  //existing product mode
+  const handleExistingProductCart = async (quantity, price, properties) => {
+  if (!cartSettings.baseProductId) {
+    throw new Error("No product selected. Please configure cart settings.");
+  }
+
+  if (!cartSettings.productVariantId) {
+    throw new Error("No variant selected. Please select a variant.");
+  }
+
+  console.log("Adding existing product to cart...");
+
+  // Shopify Ajax Cart API
+  const response = await fetch('/cart/add.js', {
+    method: 'POST',
+    headers: { 
+      'Content-Type': 'application/json',
+      'Accept': 'application/json'
+    },
+    body: JSON.stringify({
+      items: [{
+        id: cartSettings.productVariantId,
+        quantity: quantity,
+        properties: Object.fromEntries(
+          properties.map(p => [p.key, p.value])
+        )
+      }]
+    })
+  });
+
+  if (!response.ok) {
+    let errorMessage = 'Failed to add to cart';
+    try {
+      const error = await response.json();
+      errorMessage = error.description || error.message || errorMessage;
+    } catch (e) {
+      // Response wasn't JSON, use status code
+      errorMessage = `Error ${response.status}: Failed to add to cart`;
+    }
+    throw new Error(errorMessage);
+  }
+
+  let result;
+  try {
+    result = await response.json();
+  } catch (e) {
+    throw new Error('Invalid response from cart API');
+  }
+  console.log("Cart API Response:", result);
+
+  // Update cart count in theme
+  if (window.Shopify && window.Shopify.updateCart) {
+    window.Shopify.updateCart();
+  }
+
+  return result;
+};
+
+
+  //dynamic variant mode
+  const handleDynamicVariantCart = async (quantity, price, properties) => {
+    if (!cartSettings.baseProductId) {
+      throw new Error("No product selected. Please configure cart settings.");
+    }
+
+    if (!cartSettings.variantMapping || cartSettings.variantMapping.length === 0) {
+      throw new Error("No variant options mapped. Please configure variant mapping.");
+    }
+
+    console.log("Creating dynamic variant...");
+
+    // Build variant options from form values
+    const variantOptions = cartSettings.variantMapping.map(mapping => {
+      const value = formValues[mapping.elementId];
+      return {
+        name: mapping.optionName,
+        value: String(value || "")
+      };
+    });
+
+    //generate sku
+    let sku = "";
+    if (cartSettings.generateSKU) {
+      const timestamp = Date.now().toString().slice(-6);
+      sku = `${cartSettings.skuPrefix || "CUSTOM-"}${timestamp}`;
+    }
+
+    //generate variant title
+    const variantTitle = variantOptions.map(opt => opt.value).join(" - ");
+
+    console.log("Variant Options:", variantOptions);
+    console.log("Variant Title:", variantTitle);
+    console.log("SKU:", sku);
+
+    //call api to find or create variant
+    const response = await fetch('/api/cart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action: 'find_or_create_variant',
+        data: {
+          productId: cartSettings.baseProductId,
+          title: variantTitle,
+          price: price,
+          sku: sku,
+          options: variantOptions,
+          metafields: [
+            {
+              namespace: "custom",
+              key: "form_data",
+              value: JSON.stringify(formValues),
+              type: "json"
+            }
+          ]
+        }
+      })
+    });
+
+    let result;
+    try {
+      result = await response.json();
+    } catch (e){
+      throw new Error('Invalid response from variant api');
+    }
+
+    if (!result.success) {
+      throw new Error(result.error || "Failed to create variant");
+    }
+
+    console.log("Variant created/found:", result.variant);
+
+    // add to cart with the variant ID
+    const cartData = {
+      variantId: result.variant.id,
+      quantity: quantity,
+      properties: properties
+    };
+
+    console.log("Adding variant to cart:", cartData);
+    
+    return result;
+};
+
+
+//draft order mode
+const handleDraftOrderCart = async (quantity, price, properties) => {
+  console.log("Creating draft order...");
+
+  // Build line items
+  const lineItems = [{
+    title: `Custom Form Submission - ${form.name}`,
+    quantity: quantity,
+    originalUnitPrice: price,
+    customAttributes: properties
+  }];
+
+  // Replace template variables in order note
+  let orderNote = cartSettings.orderNoteTemplate || "Custom form submission";
+  orderNote = orderNote.replace("{{form_data}}", JSON.stringify(formValues, null, 2));
+  orderNote = orderNote.replace("{{calculated_price}}", calculator.formatPrice(price));
+
+  console.log("Line Items:", lineItems);
+  console.log("Order Note:", orderNote);
+
+  // Call API to create draft order
+  const response = await fetch('/api/cart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      action: 'create_draft_order',
+      data: {
+        customerEmail: "", // Would get from customer in real scenario
+        lineItems: lineItems,
+        note: orderNote,
+        tags: ["custom-form", form.name],
+        metafields: [
+          {
+            namespace: "custom",
+            key: "form_submission",
+            value: JSON.stringify(formValues),
+            type: "json"
+          }
+        ]
+      }
+    })
+  });
+
+  let result;
+  try {
+    result = await response.json();
+  } catch (e) {
+    throw new Error('Invalid response from draft order API');
+  }
+
+  if (!result.success) {
+    throw new Error(result.error || "Failed to create draft order");
+  }
+
+  console.log("Draft Order created:", result.draftOrder);
+
+  // Show invoice URL
+  if (result.draftOrder.invoiceUrl) {
+    alert(`Draft Order Created!\n\nInvoice URL: ${result.draftOrder.invoiceUrl}`);
+  }
+
+  return result;
+};
+
+//adding to cart success notification component
+// Add this after handleDraftOrderCart function
+  const CartSuccessNotification = () => {
+    if (!cartSuccess) return null;
+
+    return (
+      <div style={{
+        position: 'fixed',
+        top: 20,
+        right: 20,
+        background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+        color: 'white',
+        padding: '16px 24px',
+        borderRadius: 12,
+        boxShadow: '0 4px 16px rgba(16, 185, 129, 0.3)',
+        zIndex: 9999,
+        animation: 'slideIn 0.3s ease-out',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12
+      }}>
+        <span style={{ fontSize: 24 }}>✅</span>
+        <div>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>
+            {cartSettings.mode === 'draft_order' ? 'Quote Submitted!' : 'Added to Cart!'}
+          </div>
+          <div style={{ fontSize: 13, opacity: 0.9 }}>
+            {cartSettings.mode === 'draft_order' 
+              ? 'Check your email for invoice' 
+              : `${calculator.getCartQuantity(formValues)} item(s)`}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
 
   const getCalculatedValue = (component) => {
     if(component.type !== "calculation_display") return 0;
@@ -334,6 +937,22 @@ export default function FormBuilderPreview(){
   const isSubmitting = fetcher.state === "submitting";
   //show loading state during submission
 
+  const getButtonText = () => {
+    if (isAddingToCart) {
+      return cartProgress || "processing...";
+    }
+    
+    switch (cartSettings.mode) {
+      case "existing_product":
+        return "🛒 Add to Cart";
+      case "dynamic_variant":
+        return "⚡ Configure & Add to Cart";
+      case "draft_order":
+        return "📋 Submit Quote Request";
+      default:
+        return "Add to Cart";
+    }
+  };
 
   //===================render=========================
   return (
@@ -432,6 +1051,7 @@ export default function FormBuilderPreview(){
                       onChange={(value) => handleValueChange(component.id, value)}
                       calculatedValue={getCalculatedValue(component)}
                       formValues={formValues}
+                      onDataLookupChange={(inputId, value) => handleValueChange(inputId, value)}
                     />
                   </div>
                 );
@@ -441,37 +1061,141 @@ export default function FormBuilderPreview(){
 
           {components.length > 0 && (
             <div style={styles.submitSection}>
+              {/* ERROR MESSAGE */}
+              {cartError && (
+                <div style={{
+                  padding: "12px",
+                  background: "#fee2e2",
+                  border: "1px solid #fecaca",
+                  borderRadius: "6px",
+                  color: "#991b1b",
+                  fontSize: "14px",
+                  marginBottom: "12px"
+                }}>
+                  ⚠️ {cartError}
+                </div>
+              )}
+
+              {/* SUCCESS MESSAGE */}
+              {cartSuccess && (
+                <div style={{
+                  padding: "12px",
+                  background: "#d1fae5",
+                  border: "1px solid #6ee7b7",
+                  borderRadius: "6px",
+                  color: "#065f46",
+                  fontSize: "14px",
+                  marginBottom: "12px"
+                }}>
+                  ✓ {cartSettings.successMessage || "Added to cart!"}
+                </div>
+              )}
+
+              {/* SUBMIT BUTTON */}
+
+              
               <button 
-                style={styles.submitButton}
+                style={{
+                  ...styles.submitButton,
+                  opacity: isAddingToCart ? 0.7 : 1,
+                  cursor: isAddingToCart ? "wait" : "pointer"
+                }}
+                disabled={isAddingToCart}
                 onMouseEnter={(e) => {
-                  e.currentTarget.style.background = "#047857";
-                  e.currentTarget.style.transform = "translateY(-2px)";
-                  e.currentTarget.style.boxShadow = "0 6px 12px rgba(5, 150, 105, 0.3)";
+                  if (!isAddingToCart) {
+                    e.currentTarget.style.background = "#047857";
+                    e.currentTarget.style.transform = "translateY(-1px)";      // ✅ Subtle lift (1px)
+                    e.currentTarget.style.boxShadow = "0 4px 8px rgba(5, 150, 105, 0.25)";  // ✅ Gentle shadow
+                  }
                 }}
                 onMouseLeave={(e) => {
-                  e.currentTarget.style.background = "#059669";
-                  e.currentTarget.style.transform = "translateY(0)";
-                  e.currentTarget.style.boxShadow = "0 4px 6px rgba(5, 150, 105, 0.25)";
+                  if (!isAddingToCart) {
+                    e.currentTarget.style.background = "#059669";
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "0 2px 4px rgba(5, 150, 105, 0.2)";   // ✅ Subtler base
+                  }
                 }}
-                onClick={() => {
-                
-                  console.log("Form Values:", formValues);
-                  console.log("Calculated Price:", calculatedPrice);
-                  alert(`Total Price: ${calculator.formatPrice(calculatedPrice)}\n\nForm Data: ${JSON.stringify(formValues, null, 2)}`);
-                }}
+                onClick={handleAddToCart}
               >
-                Add to Cart - {calculator.formatPrice(calculatedPrice)}
+                {getButtonText()}
               </button>
+
+              {/* progress indicator*/}
+              {isAddingToCart && cartProgress && (
+                <div style={{
+                  marginTop: "12px",
+                  padding: "10px 12px",
+                  fontSize: "13px",
+                  color: "#059669",
+                  textAlign: "center",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: "8px",
+                  background: "#ecfdf5", 
+                  borderRadius: "6px",
+                  border: "1px solid #a7f3d0",
+                }}>
+                  <div style={{
+                    width: "16px",
+                    height: "16px",
+                    border: "2px solid #059669",
+                    borderTopColor: "transparent",
+                    borderRadius: "50%",
+                    animation: "spin 0.8s linear infinite"
+                  }}></div>
+                  <span>{cartProgress}</span>
+                </div>
+              )}
+
+            
+              <div style={{ 
+                marginTop: "12px",           
+                fontSize: "12px",           
+                color: "#6b7280",
+                textAlign: "center",
+                padding: "8px 12px",         
+                background: "#f9fafb",       
+                borderRadius: "6px",         
+                border: "1px solid #e5e7eb"  
+                }}>
+                {cartSettings.mode === "existing_product" && (
+                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                    <span style={{ fontSize: "14px" }}>🛒</span>
+                    <span>Using existing product</span>
+                  </span>
+                )}
+                {cartSettings.mode === "dynamic_variant" && (
+                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                    <span style={{ fontSize: "14px" }}>⚡</span>
+                    <span>Creating custom variant</span>
+                  </span>
+                )}
+                {cartSettings.mode === "draft_order" && (
+                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
+                    <span style={{ fontSize: "14px" }}>📋</span>
+                    <span>Creating quote for review</span>
+                  </span>
+                )}
+              </div>
             </div>
           )}
-          </div>
+
       </div>
     </div>
-  )
+    {/* Spinner Animation */}
+    <style>{`
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+    `}</style>
+    </div>   
+  );
 }
 
 // ==================== RENDER COMPONENT ====================
-function RenderComponent({ component = {}, value, onChange, calculatedValue, formValues }) {
+function RenderComponent ({component = {}, value, onChange, calculatedValue, formValues, onDataLookupChange }) {
   const {
     type,
     label,
@@ -585,7 +1309,14 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
           {renderLabel(label)}
           <select
             value={value || ""}
-            onChange={(e) => onChange(e.target.value)}
+            onChange={(e) => {
+              console.log("Dropdown change:", {
+                elementId: component.id,
+                selectedValue: e.target.value,
+                selectedOption: options?.find(o => String(o.id) === e.target.value)
+              });
+              onChange(e.target.value);  
+            }}
             onFocus={(e) => {
               e.currentTarget.style.borderColor = "#3b82f6";
               e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
@@ -709,49 +1440,82 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
         </div>
       );
 
-    case "number_input":
-      return (
-        <div style={{
-          width: compStyles?.width || "100%",
-          marginBottom: compStyles?.marginBottom || "16px",
-        }}>
-          {renderLabel(label)}
-          <input
-            type="number"
-            value={value || ""}
-            onChange={(e) => onChange(e.target.value)}
-            onFocus={(e) => {
-              e.currentTarget.style.borderColor = "#3b82f6";
-              e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
-            }}
-            onBlur={(e) => {
-              e.currentTarget.style.borderColor = compStyles?.borderColor || "#e5e7eb";
-              e.currentTarget.style.boxShadow = "none";
-            }}
-            placeholder={component?.placeholder || "Enter number"}
-            min={settings?.minValue || 0}
-            max={settings?.maxValue || 10000}
-            step={settings?.maxDecimal > 0 ? `0.${'0'.repeat(settings.maxDecimal - 1)}1` : 1}
-            style={{
-              ...getFieldStyles(),
-              cursor: "text",
-            }}
-          />
-          {settings?.useAsQuantity && (
-            <div style={{ 
-              marginTop: 6, 
-              fontSize: 12, 
-              color: "#3b82f6",
-              display: "flex",
-              alignItems: "center",
-              gap: 4,
-            }}>
-              <span style={{ fontSize: 14 }}>ℹ️</span>
-              <span>This will be used as product quantity</span>
-            </div>
-          )}
-        </div>
-      );
+  case "number_input":
+    //hide element if hidden setting is enabled
+    if (component.settings?.hidden){
+      return null;
+    }
+
+    return (
+      <div style={{
+        width: compStyles?.width || "100%",
+        marginBottom: compStyles?.marginBottom || "16px",
+      }}>
+        {renderLabel(label)}
+        <input
+          type="number"
+          value={value !== undefined && value !== null ? value : (component.settings?.defaultValue || "")}
+          onChange={(e) => {
+            const inputValue = e.target.value;
+            let numValue = parseFloat(inputValue);
+
+            console.log("Number input change:");
+            console.log("  Component:", component.label);
+            console.log("  Component ID:", component.id);
+            console.log("  Raw input:", inputValue);
+            console.log("  Parsed number:", numValue);
+            console.log("  Is NaN:", isNaN(numValue));
+
+            // Handle empty or invalid input
+            if (isNaN(numValue)) {
+              onChange(0);
+              return;
+            }
+
+            // Apply max decimal restriction if not using as quantity
+            if (!settings?.useAsQuantity) {
+              const maxDecimal = parseInt(settings?.maxDecimal) || 0;
+              if (maxDecimal >= 0) {
+                const multiplier = Math.pow(10, maxDecimal);
+                numValue = Math.round(numValue * multiplier) / multiplier;
+              }
+            }
+
+            // Store the number value
+            onChange(numValue);
+          }}
+          onFocus={(e) => {
+            e.currentTarget.style.borderColor = "#3b82f6";
+            e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
+          }}
+          onBlur={(e) => {
+            e.currentTarget.style.borderColor = compStyles?.borderColor || "#e5e7eb";
+            e.currentTarget.style.boxShadow = "none";
+          }}
+          placeholder={component?.placeholder || "Enter number"}
+          min={settings?.minValue || 0}
+          max={settings?.maxValue || 10000}
+          step={settings?.maxDecimal > 0 ? `0.${'0'.repeat(settings.maxDecimal - 1)}1` : 1}
+          style={{
+            ...getFieldStyles(),
+            cursor: "text",
+          }}
+        />
+        {settings?.useAsQuantity && (
+          <div style={{ 
+            marginTop: 6, 
+            fontSize: 12, 
+            color: "#3b82f6",
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+          }}>
+            <span style={{ fontSize: 14 }}>ℹ️</span>
+            <span>This will be used as product quantity</span>
+          </div>
+        )}
+      </div>
+    );
 
     case "text_block":
       return (
@@ -843,7 +1607,7 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
       );
 
     case "checkbox":
-      if (settings?.multipleSelection) {
+      if (settings?.multipleSelection){
         return (
           <div style={{
             width: compStyles?.width || "100%",
@@ -851,20 +1615,20 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
           }}>
             <label style={getLabelStyles()}>
               {label}
-              {settings?.required && <span style={{ color: "#dc2626", marginLeft: 4 }}>*</span>}
+              {settings?.required &&  <span style={{ color: "#dc2626", marginLeft: 4 }}>*</span>}
               {renderTooltip()}
             </label>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8}}>
               {options?.map((opt) => (
                 <label
                   key={opt.id}
                   style={{
-                    display: "flex",
-                    alignItems: "center",
+                    display: 'flex',
+                    alignItems: 'center',
                     gap: 8,
-                    padding: compStyles?.padding || "10px",
-                    background: compStyles?.bgColor || "#f9fafb",
-                    borderRadius: compStyles?.borderRadius || "6px",
+                    padding: compStyles?.padding || '10px',
+                    background: compStyles?.bgColor || '#f9fafb',
+                    borderRadius: compStyles?.borderRadius || '6px',
                     border: `${compStyles?.borderWidth || "1px"} solid ${compStyles?.borderColor || "#e5e7eb"}`,
                     cursor: "pointer",
                     fontFamily: compStyles?.fontFamily || "Inter, system-ui, sans-serif",
@@ -875,7 +1639,7 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
                     color: compStyles?.textColor || "#374151",
                     transition: "all 0.2s",
                   }}
-                  onMouseEnter={(e) => {
+                   onMouseEnter={(e) => {
                     e.currentTarget.style.background = "#f3f4f6";
                     e.currentTarget.style.borderColor = "#d1d5db";
                   }}
@@ -890,11 +1654,11 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
                     onChange={(e) => {
                       const currentValue = value || [];
                       const newValue = e.target.checked
-                        ? [...currentValue, opt.id]
-                        : currentValue.filter(id => id !== opt.id);
+                      ? [...currentValue, opt.id]
+                      : currentValue.filter(id => id !== opt.id);
                       onChange(newValue);
                     }}
-                    style={{ cursor: "pointer" }}
+                    style={{ cursor: 'pointer'}}
                   />
                   <span>{opt.name}</span>
                 </label>
@@ -903,50 +1667,59 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
           </div>
         );
       } else {
+        //single checkbox section
         return (
           <div style={{
-            width: compStyles?.width || "100%",
-            marginBottom: compStyles?.marginBottom || "16px",
+            width: compStyles?.width || '100%',
+            marginBottom: compStyles?. marginBottom || '16px',
           }}>
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                padding: compStyles?.padding || "12px",
-                background: compStyles?.bgColor || "#ffffff",
-                borderRadius: compStyles?.borderRadius || "6px",
-                border: `${compStyles?.borderWidth || "1px"} solid ${compStyles?.borderColor || "#e5e7eb"}`,
-                cursor: "pointer",
-                fontFamily: compStyles?.fontFamily || "Inter, system-ui, sans-serif",
-                fontSize: compStyles?.fontSize || "14px",
-                fontWeight: compStyles?.fontWeight || "500",
-                lineHeight: compStyles?.lineHeight || "1.5",
-                letterSpacing: compStyles?.letterSpacing || "0px",
-                color: compStyles?.textColor || "#374151",
-                transition: "all 0.2s",
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = "#f9fafb";
-                e.currentTarget.style.borderColor = "#d1d5db";
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = compStyles?.bgColor || "#ffffff";
-                e.currentTarget.style.borderColor = compStyles?.borderColor || "#e5e7eb";
-              }}
+            <label style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              padding: compStyles?.padding || "12px",
+              background: compStyles?.bgColor || "#ffffff",
+              borderRadius: compStyles?.borderRadius || "6px",
+              border: `${compStyles?.borderWidth || "1px"} solid ${compStyles?.borderColor || "#e5e7eb"}`,
+              cursor: "pointer",
+              fontFamily: compStyles?.fontFamily || "Inter, system-ui, sans-serif",
+              fontSize: compStyles?.fontSize || "14px",
+              fontWeight: compStyles?.fontWeight || "500",
+              lineHeight: compStyles?.lineHeight || "1.5",
+              letterSpacing: compStyles?.letterSpacing || "0px",
+              color: compStyles?.textColor || "#374151",
+              transition: "all 0.2s",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#f9fafb";
+              e.currentTarget.style.borderColor = "#d1d5db";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = compStyles?.bgColor || "#ffffff";
+              e.currentTarget.style.borderColor = compStyles?.borderColor || "#e5e7eb";
+            }}
             >
               <input
-                type="checkbox"
-                checked={!!value}
-                onChange={(e) => onChange(e.target.checked)}
-                style={{ cursor: "pointer" }}
+               type="checkbox"
+               checked={!!value}
+               onChange={(e) => {
+                //pass the numeric value
+                //when checked, use checkedValue, when unchecked use uncheckedvalue
+                const isChecked = e.target.checked;
+                const newValue = isChecked
+                  ? parseFloat(settings?.checkedValue || "10") //use checked value settings
+                  : parseFloat(settings?.unCheckedValue || "0") //use unCheckedValue setting
+                onChange(newValue);
+               }}
+               style={{ cursor: "pointer"}}
               />
               <span>
                 {label}
                 {settings?.required && <span style={{ color: "#dc2626", marginLeft: 4 }}>*</span>}
               </span>
-              {renderTooltip()}
+               {renderTooltip()}
             </label>
+
           </div>
         );
       }
@@ -1077,76 +1850,133 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
       );
 
     case "data_lookup":
+      const input1Hidden = settings?.input1Formula || false;
+      const input2Hidden = settings?.input2Formula || false;
+
+
       return (
         <div style={{
           width: compStyles?.width || "100%",
           marginBottom: compStyles?.marginBottom || "16px",
         }}>
           {renderLabel(label)}
-          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <div>
-              <label style={{ 
-                display: "block", 
-                marginBottom: 6, 
-                fontSize: 13, 
-                fontWeight: 500,
-                fontFamily: compStyles?.fontFamily || "Inter, system-ui, sans-serif",
-                color: compStyles?.textColor || "#374151",
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12}}>
+
+            {/*input 1: only show if not formula based*/}
+            {!input1Hidden && (
+              <div>
+                <label style={{
+                  display: 'block',
+                  marginBottom: 6,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  fontFamily: compStyles?.fontFamily || "Inter, system-ui, sans-serif",
+                  color: compStyles?.textColor || "#374151",
+                }}>
+                  {settings?.input1Name || "Input 1"}
+                </label>
+                <input
+                  type="number"
+                  placeholder="Enter value"
+                  value={formValues[`${component.id}_input1`] || ""}
+                  onChange={(e) => {
+                    const numValue = parseFloat(e.target.value);
+                    onDataLookupChange(
+                      `${component.id}_input1`, 
+                      isNaN(numValue) ? 0 : numValue
+                    );
+                  }}
+                    
+                  min={settings?.input1MinValue || 0}
+                  max={settings?.input1MaxValue || 10000}
+                  step={settings?.input1MaxDecimal > 0 ? `0.${'0'.repeat(settings.input1MaxDecimal - 1)}1` : 1}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = "#3b82f6";
+                    e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = compStyles?.borderColor || "#e5e7eb";
+                    e.currentTarget.style.boxShadow = "none";
+                  }}
+                  style={{
+                    ...getFieldStyles(),
+                    height: "36px",
+                    cursor: "text"
+                  }}
+                />
+              </div>
+            )}
+
+            {/*input 2 - only show if not formula-based*/}
+            {!input2Hidden && (
+              <div>
+                <label style={{
+                  display: "block",
+                  marginBottom: 6,
+                  fontSize: 13,
+                  fontWeight: 500,
+                  fontFamily: compStyles?.fontFamily || "Inter, system-ui, sans-serif",
+                  color: compStyles?.textColor || "#374151",
+                }}>
+                    {settings?.input2Name || "Input 2"}
+                </label>
+                <input
+                  type="number"
+                  placeholder="Enter value"
+                  value={formValues[`${component.id}_input2`] || ""}
+                  onChange={(e) => {
+                    const numValue = parseFloat(e.target.value);
+                    onDataLookupChange(
+                      `${component.id}_input2`, 
+                      isNaN(numValue) ? 0 : numValue
+                    );
+                  }}
+                  min={settings?.input2MinValue || 0}
+                  max={settings?.input2MaxValue || 10000}
+                  step={settings?.input2MaxDecimal > 0 ? `0.${'0'.repeat(settings.input2MaxDecimal - 1)}1` : 1}
+                  onFocus={(e) => {
+                    e.currentTarget.style.borderColor = "#3b82f6";
+                    e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
+                  }}
+                  onBlur={(e) => {
+                    e.currentTarget.style.borderColor = compStyles?.borderColor || "#e5e7eb";
+                    e.currentTarget.style.boxShadow = "none";
+                  }}
+                  style={{
+                    ...getFieldStyles(),
+                    height: "36px",
+                    cursor: "text",
+                  }}
+                />
+              </div>
+            )}
+
+            {/*formula info*/}
+            {(input1Hidden || input2Hidden) && (
+              <div style={{
+                padding: 10,
+                background: "#eff6ff",
+                border: "1px solid #bfdbfe",
+                borderRadius: 6,
+                fontSize: 12,
+                color: "#1e40af",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
               }}>
-                {settings?.input1Name || "Input 1"}
-              </label>
-              <input
-                type="number"
-                placeholder="Enter value"
-                value={formValues[`${component.id}_input1`] || ""}
-                onChange={(e) => onChange({ ...formValues, [`${component.id}_input1`]: e.target.value })}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = "#3b82f6";
-                  e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = compStyles?.borderColor || "#e5e7eb";
-                  e.currentTarget.style.boxShadow = "none";
-                }}
-                style={{
-                  ...getFieldStyles(),
-                  height: "36px",
-                  cursor: "text",
-                }}
-              />
-            </div>
-            <div>
-              <label style={{ 
-                display: "block", 
-                marginBottom: 6, 
-                fontSize: 13, 
-                fontWeight: 500,
-                fontFamily: compStyles?.fontFamily || "Inter, system-ui, sans-serif",
-                color: compStyles?.textColor || "#374151",
-              }}>
-                {settings?.input2Name || "Input 2"}
-              </label>
-              <input
-                type="number"
-                placeholder="Enter value"
-                value={formValues[`${component.id}_input2`] || ""}
-                onChange={(e) => onChange({ ...formValues, [`${component.id}_input2`]: e.target.value })}
-                onFocus={(e) => {
-                  e.currentTarget.style.borderColor = "#3b82f6";
-                  e.currentTarget.style.boxShadow = "0 0 0 3px rgba(59, 130, 246, 0.1)";
-                }}
-                onBlur={(e) => {
-                  e.currentTarget.style.borderColor = compStyles?.borderColor || "#e5e7eb";
-                  e.currentTarget.style.boxShadow = "none";
-                }}
-                style={{
-                  ...getFieldStyles(),
-                  height: "36px",
-                  cursor: "text",
-                }}
-              />
-            </div>
-            {tableData && tableData.rows && tableData.rows.length > 0 && (
+                <span style={{ fontSize: 16 }}>ℹ️</span>
+                <span>
+                  {input1Hidden && input2Hidden
+                  ? "Both inputs are calculated automatically"
+                  : input1Hidden
+                  ? `${settings?.input1Name || "Input 1"} is auto-calculated`
+                  : `${settings?.input2Name || "Input 2"} is auto-calculated`}
+                </span>
+              </div>
+            )}
+
+            {/*table status*/}
+            {tableData?.rows?.length >0 && (
               <div style={{
                 padding: 10,
                 background: "#ecfdf5",
@@ -1160,15 +1990,12 @@ function RenderComponent({ component = {}, value, onChange, calculatedValue, for
               }}>
                 <span style={{ fontSize: 16 }}>✓</span>
                 <span>
-                  <strong>Table data loaded:</strong> {tableData.fileName || "Custom table"} 
-                  <span style={{ marginLeft: 4, color: "#059669" }}>
-                    ({tableData.rows.length} rows)
-                  </span>
+                  <strong>Lookup active:</strong> {tableData.rows.length} rows × {tableData.columnHeaders?.length || 0} cols
                 </span>
               </div>
             )}
           </div>
-        </div>
+       </div>
       );
 
     case "radio":
@@ -1461,17 +2288,20 @@ const styles = {
     padding: "40px 20px",
     display: "flex",
     justifyContent: "center",
+    alignItems: "flex-start",
     background: "linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%)",
+    minHeight: "100%",
   },
 
   formPreview: {
     width: "100%",
-    maxWidth: 800,
+    maxWidth: "min(1200px, calc(100vw - 40px))",
     background: "#fff",
     borderRadius: 12,
-    padding: 40,
+    padding: "clamp(16px, 5vw, 40px)",          
     boxShadow: "0 10px 25px rgba(0,0,0,0.08), 0 4px 6px rgba(0,0,0,0.03)",
-    minHeight: "calc(100vh - 160px)",
+    minHeight: "auto",
+    marginBottom: "40px",
   },
 
   formHeader: {
@@ -1517,29 +2347,30 @@ const styles = {
   },
 
   elementWrapper: {
-    // No extra styling needed
+    
   },
 
   submitSection: {
-    marginTop: 40,
+    marginTop: 32,
     paddingTop: 24,
-    borderTop: "2px solid #e5e7eb",
+    borderTop: "1px solid #e5e7eb",
     display: "flex",
-    justifyContent: "center",
+    flexDirection: "column",
   },
 
   submitButton: {
-    padding: "16px 40px",
-    borderRadius: 8,
+    padding: "12px 24px",
+    borderRadius: 6,
     border: "none",
     cursor: "pointer",
     background: "#059669",
     color: "#fff",
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: 600,
-    boxShadow: "0 4px 6px rgba(5, 150, 105, 0.25)",
+    boxShadow: "0 2px 4px rgba(5, 150, 105, 0.2)",
     transition: "all 0.2s",
-    minWidth: 200,
+    width: "100%",
+    maxWidth: "100%",
   },
 };
 
@@ -1679,5 +2510,5 @@ const modalStyles = {
     color: "#fff",
     transition: "background 0.2s",
   },
+
 };
-              

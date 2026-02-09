@@ -21,7 +21,8 @@ export const loader = async({ request })=> {
   return json ({ forms, shop });
 };
 
-
+//action - handle saving forms
+  //action - handle saving forms
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session?.shop;
@@ -48,7 +49,13 @@ export const action = async ({ request }) => {
           shop, 
           name, 
           description: editorType,
-          isActive: true 
+          isActive: true,
+          cartSettings: JSON.stringify({
+            mode: "existing_product",
+            redirectAfterAdd: true,
+            showSuccessMessage: true,
+            successMessage: "Added to cart!"
+          })
         },
         include: { fields: true },
       });
@@ -105,6 +112,7 @@ export const action = async ({ request }) => {
             productSettings: parseJsonSetting("productSettings"),
             nonProductSettings: parseJsonSetting("nonProductSettings"),
             advancedSettings: parseJsonSetting("advancedSettings"),
+            cartSettings: parseJsonSetting("cartSettings"),
           },
         });
 
